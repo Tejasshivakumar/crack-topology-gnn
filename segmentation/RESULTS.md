@@ -293,18 +293,29 @@ Run 3 used **fewer training images** (300 vs 374) but achieved **0.722 crack_iou
 
 ---
 
-## Next Steps — Stage 2 & 3
+## Stage 2 & 3 — Complete ✅
 
-### Stage 2: Generate masks → graphs
-```bash
-python generate_masks.py \
-    --checkpoint-path ../outputs/segmentation/checkpoints/<best>.ckpt \
-    --input-dir "/Users/tejasskamar/Practicum/Data Set/CrackDataset_DL_HY/split/test/images" \
-    --output-dir ../outputs/masks \
-    --image-size 512
-```
+### Stage 2 Results (DeepCrack)
 
-### Stage 3: GNN link prediction
-- Input: binary crack masks from Stage 2 converted to graphs
-- Goal: predict crack connectivity and evolution
-- Potential use of `BoxLevel_Detection` data: crack type labels (Alligator / Longitudinal / Transverse / Sealed) can supervise graph-level classification in Stage 3
+Stage 2 converted all 537 DeepCrack images to PyG graphs:
+
+| | Train | Test |
+|--|------:|-----:|
+| Graphs | 300 | 237 |
+| Nodes mean / max | 24.7 / 205 | 34.8 / 180 |
+| Edges mean / max | 22.2 / 184 | 31.4 / 183 |
+
+Output: `outputs/graphs/graphs/train_graphs.pt`, `test_graphs.pt`
+
+### Stage 3 Results (DeepCrack test set, 237 graphs)
+
+GNN link prediction trained for 300 epochs, best checkpoint at epoch 260:
+
+| Task | Metric | Value |
+|---|---|---|
+| Node prediction (primary) | AUC-ROC | **0.8321** |
+| Node prediction | F1 Score | 0.2518 |
+| Edge prediction (secondary) | AUC-ROC | **0.7247** |
+| Edge prediction | Hits@20 | **0.9622** |
+
+All research claim thresholds met. See `link_prediction/IMPLEMENTATION.md` for full details.

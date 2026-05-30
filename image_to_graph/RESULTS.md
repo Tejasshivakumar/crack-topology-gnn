@@ -176,8 +176,17 @@ The `Data` objects saved here feed directly into the Stage 3 GNN link predictor.
 - **`data.edge_attr`** `[2E, 7]` — edge features; used by edge-conditioned GNN layers
 - **`data.filename`** — links predictions back to the original image for evaluation
 
-For link prediction, Stage 3 will:
-1. Use existing edges as positive examples
-2. Sample node pairs with no current edge as negative examples
-3. Train a GNN to score whether a given node pair should be connected
-4. Focus especially on endpoint–endpoint pairs (crack tips are the most likely future connections)
+Stage 3 trains two jointly-optimised tasks on these graphs:
+1. **Node prediction** — identify endpoint nodes whose neighbours have been removed (missing crack tips)
+2. **Edge prediction** — reconstruct hidden crack segments between nodes (link prediction)
+
+### Stage 3 Results (DeepCrack test set)
+
+| Task | Metric | Value |
+|---|---|---|
+| Node prediction | AUC-ROC | **0.8321** |
+| Node prediction | Avg Precision | 0.4230 |
+| Edge prediction | AUC-ROC | **0.7247** |
+| Edge prediction | Hits@20 | **0.9622** |
+
+See `link_prediction/IMPLEMENTATION.md` for full details.
