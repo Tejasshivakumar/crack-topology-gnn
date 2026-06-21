@@ -1,13 +1,16 @@
 """
 Visualisation for Phase 3 predictions.
 
-Produces a 2-panel figure per graph:
-  Left  — Edge prediction: visible edges (blue), predicted missing edges (red dashed),
-           missed edges (grey dashed)
-  Right — Node prediction: nodes coloured by whether the model correctly identified
-           them as having a hidden neighbour
+Produces a figure per graph:
+  Panel 0 (if mask_dir given) — Reference: crack mask + skeleton overlay
+  Panel 1 — Node prediction: nodes coloured by TP/FP/TN/FN for missing-tip detection
+  Panel 2 — Edge prediction: visible/predicted-missing/missed edges
+
+When mask_dir is provided the skeleton is also drawn as a faint background
+in the prediction panels so the graph topology can be judged in spatial context.
 """
 
+import os
 import numpy as np
 import torch
 import matplotlib
@@ -28,6 +31,67 @@ def _node_positions(data):
     return {i: (x_arr[i], 1.0 - y_arr[i]) for i in range(data.x.size(0))}
 
 
+def _load_background(filename, mask_dir):
+    """
+    Load binary mask and compute skeleton for the given graph filename.
+    Returns (mask_uint8 [H,W], skeleton_uint8 [H,W]) or (None, None).
+    """
+    if mask_dir is None:
+        return None, None
+    mask_path = os.path.join(mask_dir, filename)
+    if not os.path.exists(mask_path):
+        return None, None
+    try:
+        import cv2
+        from skimage.morphology import skeletonize
+        mask_gray = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        if mask_gray is None:
+            return None, None
+        _, binary = cv2.threshold(mask_gray, 127, 1, cv2.THRESH_BINARY)
+        skeleton = skeletonize(binary).astype(np.uint8)
+        return binary, skeleton
+    except Exception:
+        return None, None
+
+
+def _draw_reference_panel(ax, mask, skeleton):
+    """Draw the mask + skeleton reference panel."""
+    ax.set_facecolor('#1a1a1a')
+    ax.set_title('Reference — Crack Mask & Skeleton\n'
+                 'grey=crack region  cyan=skeleton centreline',
+                 color='white', fontsize=9)
+    ax.set_xlim(-0.05, 1.05)
+    ax.set_ylim(-0.05, 1.05)
+    ax.axis('off')
+
+    H, W = mask.shape
+    rgb = np.zeros((H, W, 3), dtype=np.float32)
+    rgb[mask > 0] = [0.30, 0.30, 0.30]   # crack region: dark grey
+    rgb[skeleton > 0] = [0.0, 0.85, 0.85]  # skeleton: cyan
+    # extent + origin='upper': row 0 → y=1 (top), matching _node_positions flip
+    ax.imshow(rgb, extent=[0, 1, 0, 1], origin='upper', aspect='auto', zorder=2)
+
+
+def _draw_skeleton_bg(ax, mask, skeleton):
+    """
+    Draw crack mask + skeleton as a background on a prediction panel.
+    Mask region shows as dim grey; skeleton centreline shows as brighter cyan.
+    """
+    H, W = mask.shape
+    rgba = np.zeros((H, W, 4), dtype=np.float32)
+    # Crack mask region: dim grey
+    crack_px = mask > 0
+    rgba[crack_px, :3] = 0.45
+    rgba[crack_px, 3]  = 0.35
+    # Skeleton centreline on top: brighter cyan
+    skel_px = skeleton > 0
+    rgba[skel_px, 0] = 0.0
+    rgba[skel_px, 1] = 0.85
+    rgba[skel_px, 2] = 0.85
+    rgba[skel_px, 3] = 0.65
+    ax.imshow(rgba, extent=[0, 1, 0, 1], origin='upper', aspect='auto', zorder=1)
+
+
 def visualize_predictions(
     graph,
     encoder,
@@ -36,16 +100,28 @@ def visualize_predictions(
     device,
     save_path: str = None,
     edge_threshold: float = 0.5,
-    node_threshold: float = 0.5,
+    node_threshold: float = 0.3,
     node_mask_frac: float = 0.20,
     dpi: int = 130,
+    mask_dir: str = None,
 ):
     """
-    Generate a 2-panel figure showing edge and node predictions for one graph.
+    Generate a figure showing edge and node predictions for one graph.
+
+    When mask_dir is given a 3-panel layout is used:
+        [Reference: mask+skeleton | Node prediction | Edge prediction]
+    and the skeleton is drawn as a faint background in both prediction panels.
+    Without mask_dir the original 2-panel layout is used.
     """
     encoder.eval(); edge_pred.eval(); node_pred.eval()
 
-    # ── Panel 1: Edge prediction ──────────────────────────────────────────────
+    fname = getattr(graph, 'filename', 'graph')
+
+    # ── Optionally load mask/skeleton background ──────────────────────────────
+    mask, skeleton = _load_background(fname, mask_dir)
+    has_bg = mask is not None
+
+    # ── Edge prediction data ──────────────────────────────────────────────────
     try:
         train_d, _, test_d = _EDGE_SPLITTER(graph)
     except Exception:
@@ -63,12 +139,7 @@ def visualize_predictions(
         e_labels = test_d.edge_label.numpy()
         e_edges  = test_d.edge_label_index.numpy()
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    fig.patch.set_facecolor('#1a1a1a')
-    fname = getattr(graph, 'filename', 'graph')
-    fig.suptitle(f'{fname}  |  Phase 3: Topology Understanding', color='white', fontsize=11)
-
-    # ── Panel 1: Node prediction (primary task — left panel) ─────────────────
+    # ── Node prediction data ──────────────────────────────────────────────────
     masked_d, node_labels, hidden_mask, eval_mask = apply_node_mask(
         graph, mask_frac=node_mask_frac, seed=42
     )
@@ -80,29 +151,43 @@ def visualize_predictions(
         z        = encoder(x, ei, ea)
         n_probs  = torch.sigmoid(node_pred(z)).cpu().numpy()
 
-    ax = axes[0]
-    ax.set_facecolor('#1a1a1a')
-    ax.set_title('Task 1 — Missing Crack Tip Detection (primary)\n'
-                 'green=TP  red=FP  grey=TN  orange=FN  ✕=removed tip',
-                 color='white', fontsize=9)
-    ax.set_xlim(-0.05, 1.05); ax.set_ylim(-0.05, 1.05)
-    ax.axis('off')
+    # ── Figure layout ─────────────────────────────────────────────────────────
+    ncols   = 3 if has_bg else 2
+    figw    = 21 if has_bg else 14
+    fig, axes = plt.subplots(1, ncols, figsize=(figw, 6))
+    fig.patch.set_facecolor('#1a1a1a')
+    fig.suptitle(f'{fname}  |  Phase 3: Topology Understanding', color='white', fontsize=11)
 
-    # Draw remaining (masked) edges
+    if has_bg:
+        ax_ref, ax_node, ax_edge = axes
+        _draw_reference_panel(ax_ref, mask, skeleton)
+    else:
+        ax_node, ax_edge = axes
+
+    # ── Node prediction panel ─────────────────────────────────────────────────
+    ax_node.set_facecolor('#1a1a1a')
+    ax_node.set_title('Task 1 — Missing Crack Tip Detection (primary)\n'
+                      'green=TP  red=FP  grey=TN  orange=FN  ✕=removed tip',
+                      color='white', fontsize=9)
+    ax_node.set_xlim(-0.05, 1.05); ax_node.set_ylim(-0.05, 1.05)
+    ax_node.axis('off')
+
+    if has_bg:
+        _draw_skeleton_bg(ax_node, mask, skeleton)
+
     mei = masked_d.edge_index.numpy()
     for i in range(0, mei.shape[1], 2):
         u, v = mei[0, i], mei[1, i]
         xs = [pos[u][0], pos[v][0]]; ys = [pos[u][1], pos[v][1]]
-        ax.plot(xs, ys, color='royalblue', linewidth=1.5, alpha=0.6)
+        ax_node.plot(xs, ys, color='royalblue', linewidth=1.5, alpha=0.6, zorder=3)
 
-    # Draw nodes with prediction colouring
     node_labels_np = node_labels.numpy()
     for i, (px, py) in pos.items():
         if hidden_mask[i]:
-            ax.scatter(px, py, c='yellow', s=80, marker='x', zorder=6, linewidths=2)
+            ax_node.scatter(px, py, c='yellow', s=80, marker='x', zorder=6, linewidths=2)
             continue
         if not eval_mask[i]:
-            ax.scatter(px, py, c='#555555', s=20, zorder=5)
+            ax_node.scatter(px, py, c='#555555', s=20, zorder=5)
             continue
         true_lbl = node_labels_np[i]
         pred_lbl = float(n_probs[i] >= node_threshold)
@@ -110,7 +195,7 @@ def visualize_predictions(
         elif true_lbl == 0 and pred_lbl == 1: color = '#ff4444'
         elif true_lbl == 1 and pred_lbl == 0: color = '#ff8800'
         else:                                  color = '#aaaaaa'
-        ax.scatter(px, py, c=color, s=50, zorder=5, edgecolors='black', linewidths=0.4)
+        ax_node.scatter(px, py, c=color, s=50, zorder=5, edgecolors='black', linewidths=0.4)
 
     legend_nodes = [
         Line2D([0], [0], marker='o', color='none', markerfacecolor='#44ff44', markersize=8,
@@ -123,25 +208,26 @@ def visualize_predictions(
                markeredgecolor='black', label='FN: missed hidden neighbour'),
         Line2D([0], [0], marker='x', color='yellow', markersize=10, lw=2, label='Removed crack tip (hidden)'),
     ]
-    ax.legend(handles=legend_nodes, loc='lower right', facecolor='#2a2a2a',
-              edgecolor='gray', labelcolor='white', fontsize=6.5, framealpha=0.8)
+    ax_node.legend(handles=legend_nodes, loc='lower right', facecolor='#2a2a2a',
+                   edgecolor='gray', labelcolor='white', fontsize=6.5, framealpha=0.8)
 
-    # ── Panel 2: Edge prediction (secondary task — right panel) ──────────────
-    ax2 = axes[1]
-    ax2.set_facecolor('#1a1a1a')
-    ax2.set_title('Task 2 — Missing Crack Segment Recovery (secondary)\nblue=visible  red=predicted missing  grey=missed',
-                  color='white', fontsize=9)
-    ax2.set_xlim(-0.05, 1.05); ax2.set_ylim(-0.05, 1.05)
-    ax2.axis('off')
+    # ── Edge prediction panel ─────────────────────────────────────────────────
+    ax_edge.set_facecolor('#1a1a1a')
+    ax_edge.set_title('Task 2 — Missing Crack Segment Recovery (secondary)\n'
+                      'blue=visible  red=predicted missing  grey=missed',
+                      color='white', fontsize=9)
+    ax_edge.set_xlim(-0.05, 1.05); ax_edge.set_ylim(-0.05, 1.05)
+    ax_edge.axis('off')
 
-    # Visible edges
+    if has_bg:
+        _draw_skeleton_bg(ax_edge, mask, skeleton)
+
     vis_ei = train_d.edge_index.numpy()
     for i in range(0, vis_ei.shape[1], 2):
         u, v = vis_ei[0, i], vis_ei[1, i]
         xs = [pos[u][0], pos[v][0]]; ys = [pos[u][1], pos[v][1]]
-        ax2.plot(xs, ys, color='royalblue', linewidth=1.5, alpha=0.7)
+        ax_edge.plot(xs, ys, color='royalblue', linewidth=1.5, alpha=0.7, zorder=3)
 
-    # Hidden true edges — predicted or missed
     for i in range(len(e_probs)):
         if e_labels[i] != 1:
             continue
@@ -152,19 +238,18 @@ def visualize_predictions(
         predicted = e_probs[i] >= edge_threshold
         color = 'red' if predicted else '#666666'
         lw    = 2.5  if predicted else 1.5
-        ax2.plot(xs, ys, color=color, linewidth=lw, linestyle='--', alpha=0.9)
+        ax_edge.plot(xs, ys, color=color, linewidth=lw, linestyle='--', alpha=0.9, zorder=4)
 
-    # Nodes
     for i, (px, py) in pos.items():
-        ax2.scatter(px, py, c='white', s=25, zorder=5, edgecolors='black', linewidths=0.5)
+        ax_edge.scatter(px, py, c='white', s=25, zorder=5, edgecolors='black', linewidths=0.5)
 
     legend_edges = [
         Line2D([0], [0], color='royalblue', lw=2, label='Visible crack segments'),
         Line2D([0], [0], color='red',       lw=2, linestyle='--', label='Correctly predicted missing segments'),
         Line2D([0], [0], color='#666666',   lw=2, linestyle='--', label='Missed segments (false negative)'),
     ]
-    ax2.legend(handles=legend_edges, loc='lower right', facecolor='#2a2a2a',
-               edgecolor='gray', labelcolor='white', fontsize=7, framealpha=0.8)
+    ax_edge.legend(handles=legend_edges, loc='lower right', facecolor='#2a2a2a',
+                   edgecolor='gray', labelcolor='white', fontsize=7, framealpha=0.8)
 
     plt.tight_layout()
     if save_path:

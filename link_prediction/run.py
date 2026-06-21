@@ -26,8 +26,9 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from link_prediction.train     import train, build_models
-from link_prediction.evaluate  import full_evaluation
+from link_prediction.evaluate  import full_evaluation, run_ablation_study
 from link_prediction.visualize import visualize_predictions, plot_training_curves
+from link_prediction.model     import MODEL_NAMES
 
 
 def get_device() -> torch.device:
@@ -42,23 +43,25 @@ def parse_args():
     p = argparse.ArgumentParser(description='Phase 3: crack topology GNN training + evaluation')
 
     p.add_argument('--train-graphs', type=str,
-                   default='outputs/graphs/graphs/train_graphs.pt')
+                   default='outputs/clean_graphs/graphs/train_graphs.pt')
     p.add_argument('--test-graphs',  type=str,
-                   default='outputs/graphs/graphs/test_graphs.pt')
+                   default='outputs/clean_graphs/graphs/test_graphs.pt')
     p.add_argument('--output-dir',   type=str,
                    default='outputs/link_prediction')
 
     # Model
+    p.add_argument('--model',    type=str,   default='gat', choices=MODEL_NAMES,
+                   help='Encoder architecture to train (default: gat)')
     p.add_argument('--hidden',   type=int,   default=128)
     p.add_argument('--out-dim',  type=int,   default=64)
     p.add_argument('--heads',    type=int,   default=4)
     p.add_argument('--dropout',  type=float, default=0.3)
 
     # Training
-    p.add_argument('--epochs',           type=int,   default=300)
+    p.add_argument('--epochs',           type=int,   default=400)
     p.add_argument('--lr',               type=float, default=5e-4)
     p.add_argument('--weight-decay',     type=float, default=1e-4)
-    p.add_argument('--edge-loss-weight', type=float, default=1.0,
+    p.add_argument('--edge-loss-weight', type=float, default=0.5,
                    help='Weight λ for edge prediction loss (node + λ*edge)')
     p.add_argument('--node-mask-frac',   type=float, default=0.20,
                    help='Fraction of endpoint nodes to hide per graph during node task training')
@@ -74,6 +77,13 @@ def parse_args():
     p.add_argument('--log-every', type=int, default=10)
     p.add_argument('--eval-only', action='store_true',
                    help='Skip training — load checkpoint from --output-dir and run evaluation only')
+    p.add_argument('--mask-dir',  type=str, default=None,
+                   help='Directory containing binary crack mask PNGs (same filenames as graphs). '
+                        'When provided, each visualisation gains a reference panel and a skeleton '
+                        'background overlay in the prediction panels.')
+    p.add_argument('--ablation', action='store_true',
+                   help='Run masking ablation study (fraction sweep × node_type) after evaluation '
+                        'and save results to ablation_results.json in --output-dir')
 
     return p.parse_args()
 
@@ -102,7 +112,8 @@ def main():
         ckpt      = torch.load(ckpt_path, map_location=device, weights_only=False)
         in_ch     = train_dataset[0].x.size(1)
         encoder, edge_pred, node_pred = build_models(
-            in_ch, args.hidden, args.out_dim, args.heads, args.dropout
+            in_ch, args.hidden, args.out_dim, args.heads, args.dropout,
+            model_name=args.model,
         )
         encoder.load_state_dict(ckpt['encoder'])
         edge_pred.load_state_dict(ckpt['edge_pred'])
@@ -130,6 +141,7 @@ def main():
             warmup_epochs    = args.warmup_epochs,
             device           = device,
             log_every        = args.log_every,
+            model_name       = args.model,
         )
 
         encoder   = result['encoder']
@@ -156,16 +168,25 @@ def main():
     print('  EVALUATION ON UNSEEN TEST SET')
     print('=' * 55)
 
-    metrics = full_evaluation(encoder, edge_pred, node_pred, test_dataset, device)
+    # Evaluate on CPU to prevent MPS OOM on large test sets
+    encoder.cpu(); edge_pred.cpu(); node_pred.cpu()
+    if device.type == 'mps':
+        torch.mps.empty_cache()
+    metrics = full_evaluation(encoder, edge_pred, node_pred, test_dataset,
+                              torch.device('cpu'))
 
     print('\n  ── Task 1: Node Prediction (missing crack tips — primary) ──')
-    print(f'  AUC-ROC  : {metrics["node_auc"]:.4f}')
-    print(f'  Avg Prec : {metrics["node_ap"]:.4f}')
-    print(f'  F1 Score : {metrics["node_f1"]:.4f}')
+    print(f'  AUC-ROC      : {metrics["node_auc"]:.4f}')
+    print(f'  Avg Prec     : {metrics["node_ap"]:.4f}')
+    print(f'  F1 @ 0.5     : {metrics["node_f1"]:.4f}')
+    print(f'  F1 @ opt thr : {metrics.get("node_f1_opt", 0):.4f}  '
+          f'(threshold={metrics.get("node_thresh_opt", 0.5):.3f})')
+    print(f'  Balanced Acc : {metrics.get("node_bal_acc", 0):.4f}')
 
     print('\n  ── Task 2: Edge Prediction (missing crack segments — secondary) ──')
     print(f'  AUC-ROC  : {metrics["edge_auc"]:.4f}')
     print(f'  Avg Prec : {metrics["edge_ap"]:.4f}')
+    print(f'  MRR      : {metrics.get("edge_mrr", 0):.4f}')
     for k in [10, 20]:
         key = f'edge_hits@{k}'
         if key in metrics:
@@ -180,6 +201,30 @@ def main():
         json.dump(metrics, f, indent=2)
     print(f'\nMetrics saved → {metrics_path}')
 
+    # ── Ablation study ────────────────────────────────────────────────────────
+    if args.ablation:
+        ablation_results = run_ablation_study(
+            encoder, edge_pred, node_pred, test_dataset, device,
+            mask_fracs=(0.10, 0.20, 0.30, 0.40, 0.50),
+            node_types=('endpoint', 'junction', 'random'),
+            seed=args.seed,
+        )
+        # Serialise — convert tuple keys to strings for JSON
+        serialisable = {
+            'node': {
+                f'frac={k[0]}_type={k[1]}': v
+                for k, v in ablation_results['node'].items()
+            },
+            'edge': {
+                f'frac={k}': v
+                for k, v in ablation_results['edge'].items()
+            },
+        }
+        ablation_path = os.path.join(args.output_dir, 'ablation_results.json')
+        with open(ablation_path, 'w') as f:
+            json.dump(serialisable, f, indent=2)
+        print(f'\nAblation results saved → {ablation_path}')
+
     # ── Visualisations ────────────────────────────────────────────────────────
     print(f'\nGenerating {args.vis_n if args.vis_n > 0 else "all"} test visualisations...')
     vis_graphs = test_dataset if args.vis_n < 0 else test_dataset[:args.vis_n]
@@ -190,7 +235,8 @@ def main():
         path  = os.path.join(vis_dir, stem + '.png')
         try:
             visualize_predictions(g, encoder, edge_pred, node_pred, device,
-                                  save_path=path)
+                                  save_path=path, mask_dir=args.mask_dir,
+                                  node_threshold=metrics.get('node_thresh_opt', 0.5))
         except Exception as e:
             print(f'  Skipping {fname}: {e}')
 
