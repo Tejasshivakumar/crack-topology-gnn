@@ -1,0 +1,29 @@
+# Ignore everything by default
+/*
+
+# But do not ignore these repo files
+!.gitignore
+!.github/
+
+# Allow the clustering folder but ignore everything inside it by default
+!clustering/
+clustering/*
+
+# Unignore the specific file you want to push
+!clustering/cluster.py
+
+# Make sure to ignore outputs, data, and environment files
+/outputs/
+clustering/dataset/
+*.pt
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+.DS_Store
+
+# logs
+*.log
