@@ -6,11 +6,11 @@ Stage 2 sits between the segmentation model (Stage 1) and the GNN link predictor
 It takes binary crack masks — either ground-truth labels or model-generated masks from Stage 1 — and converts them into graph-structured data that captures the full topology, geometry, and severity of each crack network.
 
 ```
-Stage 1: EnhancedGraphUNet → binary mask (PNG)
+Stage 1: HybridGraphUNet (segmentation) → binary crack mask (PNG)
                                     ↓
-Stage 2: image_to_graph   → PyG Data objects (.pt)
+Stage 2: image_to_graph   → PyG Data objects (.pt)  ← THIS STAGE
                                     ↓
-Stage 3: GNN link predictor (crack evolution prediction)
+Stage 3: GNN link prediction (topology understanding proof)
 ```
 
 ---
@@ -28,14 +28,14 @@ image_to_graph/
   IMPLEMENTATION.md    — this file
 ```
 
-Outputs written to `outputs/graphs/`:
+Outputs written to `outputs/clean_graphs/` (crack_seg_clean run):
 ```
-outputs/graphs/
+outputs/clean_graphs/
   graphs/
-    train_graphs.pt       — list of 300 PyG Data objects
-    test_graphs.pt        — list of 237 PyG Data objects
+    train_graphs.pt       — list of 3728 PyG Data objects
+    test_graphs.pt        — list of 636 PyG Data objects
     feature_schema.json   — column names for x and edge_attr
-    stats.json            — per-split dataset statistics
+    stats.json            — per-split dataset statistics + curation funnel
   visualizations/
     train/  *.png
     test/   *.png
@@ -80,6 +80,35 @@ nx_graph = sknw.build_sknw(skeleton)
 
 This gives a compact graph where nodes are topologically significant points and edges carry the full pixel-level path between them.
 
+### Step 3b — Spur Pruning *(new)*
+
+Raw skeletons from noisy or rough mask boundaries produce short "spur" branches — false leaf branches that create spurious endpoint nodes. Since `is_endpoint` is the most important feature for link prediction (endpoints are crack tips), spurious ones corrupt the signal.
+
+```python
+nx_graph = _prune_spurs(nx_graph, prune_ratio=0.1)
+```
+
+**Algorithm:** iteratively remove leaf edges (edges where at least one endpoint has degree 1) whose geometric path length is less than `prune_ratio × longest_branch_length`. The ratio is relative to the longest branch in the *current* graph so the threshold is scale-aware — it adapts to the size of each individual crack network. Iteration continues until no more prunable edges remain.
+
+**Why iterate?** Removing a spur can expose a previously interior node as a new leaf. One pass is not enough for chains of short branches.
+
+**Why relative threshold?** A fixed pixel threshold would over-prune small graphs and under-prune large ones. Using `prune_ratio × max_branch` gives a consistent behaviour across the ~5k masks which vary widely in crack density and image scale.
+
+**Topology-preserving:** only leaf edges are ever removed. Interior edges (where both endpoints have degree ≥ 2) are never touched, so the global connectivity of the crack network is preserved.
+
+Controlled by `--prune-ratio` (default `0.1`). Set to `0.0` to disable.
+
+### Step 3c — Degenerate Graph Filter *(new)*
+
+After pruning, some graphs may be too small to be meaningful for link prediction (a single node with no edges, or an isolated pair). These are dropped and logged.
+
+```python
+if nx_graph.number_of_nodes() < min_nodes or nx_graph.number_of_edges() == 0:
+    return None, None, None, 'degenerate'
+```
+
+Controlled by `--min-nodes` (default `3`). The curation funnel (raw → empty_mask → empty_graph → degenerate → converted) is written to `stats.json` and printed at the end of each run.
+
 ### Step 4 — Distance Transform for Thickness
 
 ```python
@@ -107,6 +136,8 @@ Each node gets a 6-dimensional feature vector:
 
 - **Normalised coordinates** rather than raw pixel coordinates — GNNs are sensitive to feature scale; [0,1] works across images of any resolution and keeps the spatial features on the same scale as the binary flags.
 - **degree, is_endpoint, is_junction** are all included. `degree` is continuous; `is_endpoint` and `is_junction` are explicit binary flags that make the structural role of each node immediately clear to the GNN without needing to learn a threshold on `degree`. These are the most important signals for link prediction: endpoints are crack tips that may propagate, junctions are branching points that have already connected.
+
+> **Important for Stage 3:** `degree`, `is_endpoint`, and `is_junction` (columns 3–5) are computed on the **full graph** here and saved to disk. Stage 3 must **recompute these three columns** from only the observed (message-passing) edges after the edge split — otherwise stale degree values leak the location of hidden edges to the model. Columns 0–2 (`x_norm`, `y_norm`, `thickness`) are never overwritten.
 
 ### Step 6 — Edge Feature Extraction
 
@@ -138,15 +169,16 @@ Each edge gets a 7-dimensional feature vector:
 
 Each `Data` object also carries:
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `filename` | str | source mask filename |
-| `split` | str | `'train'` or `'test'` |
-| `img_h`, `img_w` | int | original image dimensions |
-| `crack_pixels` | int | total number of crack pixels in the mask |
-| `crack_density` | float | `crack_pixels / (H × W)` |
+| Attribute | Type | Shape | Description |
+|-----------|------|-------|-------------|
+| `pos` | FloatTensor | [N, 2] | Node pixel positions **(x, y)** — used by Stage 3 for hard-negative sampling (spatially-near unconnected pairs). Stored separately from `x` so Stage 3 can read positions even after overwriting feature columns 3–5. |
+| `filename` | str | — | source mask filename |
+| `split` | str | — | `'train'` or `'test'` |
+| `img_h`, `img_w` | int | — | original image dimensions |
+| `crack_pixels` | int | — | total number of crack pixels in the mask |
+| `crack_density` | float | — | `crack_pixels / (H × W)` |
 
-These are not used by the GNN during training but are essential for debugging, analysis, and linking graph predictions back to the original images.
+`pos` stores `(x_pixel, y_pixel)` — i.e. `(column, row)` in image coordinates, consistent with the `(x_norm, y_norm)` ordering in the feature matrix. Stage 3 computes pairwise Euclidean distances from `pos` to identify candidate hard negatives.
 
 ---
 
@@ -170,54 +202,78 @@ For link prediction specifically, the key question is: **which pairs of nodes th
 
 ---
 
-## Dataset Statistics (DeepCrack)
+## Dataset Statistics (crack_seg_clean, prune_ratio=0.1, min_nodes=3)
+
+**Curation funnel:**
 
 | | Train | Test |
 |--|-------|------|
-| Images | 300 | 237 |
-| Nodes (mean / max) | 24.7 / 205 | 34.8 / 180 |
-| Edges (mean / max) | 22.2 / 184 | 31.4 / 183 |
-| Crack density (mean) | 0.0291 | 0.0433 |
-| Crack density (max) | 0.199 | 0.193 |
+| Raw masks | 4071 | 698 |
+| Skipped: empty mask | 3 | 3 |
+| Skipped: empty graph | 0 | 0 |
+| Skipped: degenerate (< 3 nodes or 0 edges) | 340 | 59 |
+| **Converted (saved to disk)** | **3728** | **636** |
+
+**Graph statistics (converted graphs only):**
+
+| | Train | Test |
+|--|-------|------|
+| Graphs | 3728 | 636 |
+| Nodes (mean / max) | 25.8 / 625 | 28.0 / 1003 |
+| Edges (mean / max) | 16.9 / 238 | 17.8 / 259 |
+| Crack density (mean) | 0.0508 | 0.0525 |
+| Crack density (max) | 0.3152 | 0.4195 |
+
+The high degenerate-filter rate (~8% train, ~8% test) reflects the diversity of the crack_seg_clean sources — many images contain very sparse or isolated crack marks that collapse to trivially small graphs after spur pruning. These are correctly excluded: link prediction requires at least 3 nodes to produce meaningful hidden-edge samples.
 
 ---
 
 ## Usage
 
-**Process the full DeepCrack dataset (train + test):**
+**Process clean crack_seg_clean dataset (train + test, one call per split):**
 ```bash
 cd crack-topology-gnn
+
 python3 image_to_graph/build_dataset.py \
-    --deepcrack-root "/path/to/DeepCrack" \
-    --output-dir outputs/graphs \
-    --vis
+    --mask-dir  "/path/to/crack_seg_clean/clean/train/masks" \
+    --image-dir "/path/to/crack_seg_clean/clean/train/images" \
+    --split train \
+    --output-dir outputs/clean_graphs \
+    --no-vis
+
+python3 image_to_graph/build_dataset.py \
+    --mask-dir  "/path/to/crack_seg_clean/clean/test/masks" \
+    --image-dir "/path/to/crack_seg_clean/clean/test/images" \
+    --split test \
+    --output-dir outputs/clean_graphs \
+    --no-vis
 ```
 
-**Process model-generated masks from Stage 1:**
-```bash
-python3 image_to_graph/build_dataset.py \
-    --mask-dir outputs/masks \
-    --image-dir /path/to/original/images \
-    --split test \
-    --output-dir outputs/graphs_generated \
-    --vis --vis-n 20
-```
+**Key CLI flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prune-ratio` | `0.1` | Remove leaf branches shorter than this × longest branch. `0.0` disables. |
+| `--min-nodes` | `3` | Drop graphs with fewer nodes after pruning. |
+| `--no-vis` | — | Skip visualisation (strongly recommended for large runs). |
+| `--vis-n` | `-1` | Max visualisations per split (`-1` = all). |
 
 **Inspect a saved dataset:**
 ```bash
-python3 image_to_graph/read_graphs.py --pt outputs/graphs/graphs/train_graphs.pt --n 3
+python3 image_to_graph/read_graphs.py --pt outputs/clean_graphs/graphs/train_graphs.pt --n 3
 ```
 
 **Use in code:**
 ```python
 import torch
-dataset = torch.load('outputs/graphs/graphs/train_graphs.pt', weights_only=False)
+dataset = torch.load('outputs/clean_graphs/graphs/train_graphs.pt', weights_only=False)
 graph = dataset[0]
 
-# graph.x          — node features [N, 6]
+# graph.x          — node features [N, 6]  (cols 3-5 will be overwritten by Stage 3)
 # graph.edge_index — edge connectivity [2, 2E]
-# graph.edge_attr  — edge features [E, 7]
-# graph.filename, graph.split, graph.crack_density, ...
+# graph.edge_attr  — edge features [2E, 7]
+# graph.pos        — node pixel positions [N, 2]  (x_pixel, y_pixel)
+# graph.filename, graph.split, graph.img_h, graph.img_w, graph.crack_density
 ```
 
 ---
@@ -225,7 +281,9 @@ graph = dataset[0]
 ## Reference
 
 - Phase 1 baseline: `/Users/tejasskamar/Practicum/PHASE 1/Aryan_Repo/TokenCutSeg/ImageToGraph/`
-- Dataset: DeepCrack — `train_lab/` (300 images), `test_lab/` (237 images)
+- **Current dataset:** crack_seg_clean — `clean/train/` (4071 masks → 3728 graphs), `clean/test/` (698 masks → 636 graphs)
+  - Path: `/Users/tejasskamar/Practicum/Data Set/crack_seg_clean/`
 - Skeletonisation: `skimage.morphology.skeletonize` (Zhang-Suen thinning)
 - Graph extraction: `sknw` (skeleton network analysis)
 - Graph format: PyTorch Geometric `Data` objects
+- Pipeline reference: `PIPELINE_AND_IMPLEMENTATION.md` (defines the structural-inference claim, all 6 known issues, and Stage 3 implementation tiers)

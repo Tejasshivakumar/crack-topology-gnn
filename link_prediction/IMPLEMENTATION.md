@@ -1,68 +1,36 @@
-# Phase 3: GNN Link & Node Prediction — Implementation
+# Stage 3: GNN Link Prediction — Implementation
 
-## Research Context
+## The Claim
 
-### Why link prediction instead of crack evolution prediction?
+This stage proves a **GNN can understand the topology of a crack graph** — it can infer structural connectivity from the rest of the graph's shape, beyond what distance or non-learning heuristics achieve.
 
-The original goal was to predict how cracks **evolve over time** — where will a crack spread next, which two cracks will merge, which tip will propagate. However, this requires **time-series data**: the same surface photographed repeatedly as the crack develops. This data does not exist in any publicly available dataset, including DeepCrack.
+Method: **edge-masking link prediction**. Hide part of each graph's connectivity; ask models to recover it from the remaining structure. This is **structural inference, not temporal forecasting** — no time/load-resolved crack dataset exists, and documenting that data gap is itself a project contribution.
 
-The professor's direction: since we cannot predict temporal evolution, we must instead **prove the model understands crack topology**. If the model genuinely understands the structure of a crack network, it should be able to reconstruct missing parts of it — and that reconstruction ability is the proxy for evolution understanding.
-
----
-
-### The Core Idea: Past → Present → Future
-
-```
-PAST crack state          PRESENT crack state       FUTURE crack state
-(more complete)     →     (what we observe)    →    (further evolved)
-                                  ↑
-                        This is our dataset.
-                        We treat it as the middle point.
-```
-
-We take the **present observation** (what the camera sees today) and deliberately remove parts of it to simulate the **past state** — what the crack looked like *before* it evolved. The model is then asked to reconstruct what was removed.
-
-Concretely:
-- A crack node (endpoint/tip) that is removed represents a **crack tip that existed in the past** before the crack grew to its current length.
-- A crack edge (segment) that is removed represents a **crack segment that existed in the past** before it was partially obscured.
-
-The model looks at the degraded (past-like) graph and reconstructs the present state. If it can do this reliably, it has proven it understands crack topology well enough that — **given the right time-series dataset** — it could be flipped to predict the *future* state instead of the past.
-
-**Research claim: the model understands crack topology, and topology understanding is the prerequisite for evolution prediction.**
-
----
-
-### The Mud/Dirt Analogy
-
-> *"Take a picture of a crack, but a part of the crack is covered by mud or dirt. The GNN predicts the covered part."*
-
-- The **hidden node** is a crack tip buried under mud — the model predicts it should exist based on the visible topology.
-- The **hidden edge** is the crack segment under the mud connecting that buried tip to the visible network — the model predicts the connection.
-
----
-
-### Conceptual Order of the Two Tasks
-
-**1. Node prediction first (missing crack tips)**
-The model looks at the present graph and asks: *"Which of these visible nodes should have another connection — a crack tip that is now missing?"* This is the deeper topology task: the model must understand what a complete crack network looks like to know when a node is incomplete.
-
-**2. Edge prediction second (missing crack segments)**
-Once the missing tips are identified (or suspected), the model predicts how they connect — which pairs of nodes should have an edge between them. Together: node prediction recovers the **where**, edge prediction recovers the **how**.
-
-**If we had time-series data**, this direction would be reversed: given the past state, predict future nodes and edges. The architecture and training approach would be identical — only the temporal direction flips.
+The proof requires a controlled comparison where structure is the only variable:
+1. GNN beats non-learning structural heuristics (CN/AA/RA) → learning adds value over fixed topology rules.
+2. Everything beats a coordinates-only baseline → the task genuinely needs topology, not just spatial proximity.
+3. GNN still wins in structure-only mode (no position features) → the model reads topology, not handed-in features.
 
 ---
 
 ## Pipeline Position
 
 ```
-Stage 1 — Segmentation          (segmentation/)
-    ↓  binary crack masks
-Stage 2 — Image-to-Graph        (image_to_graph/)
-    ↓  PyG Data objects — 6 node features, 7 edge features
-Stage 3 — Link & Node Prediction  (link_prediction/)    ← THIS STAGE
-    ↓  topology understanding proof
+Stage 1: HybridGraphUNet (segmentation) → binary crack mask (PNG)
+                    ↓
+Stage 2: image_to_graph → PyG Data objects, outputs/clean_graphs/
+                    ↓
+Stage 3: link_prediction (this stage) → topology understanding proof
 ```
+
+**Data contract from Stage 2** — each graph provides:
+
+| Field | Shape | Notes |
+|-------|-------|-------|
+| `x` | [N, 6] | cols 0–2: `x_norm, y_norm, thickness` (keep); cols 3–5: `degree, is_endpoint, is_junction` (**MUST be recomputed after edge split**) |
+| `edge_index` | [2, 2E] | undirected, both directions stored |
+| `edge_attr` | [2E, 7] | `path_length, euclidean_dist, tortuosity, angle_sym, avg_thickness, min_thickness, max_thickness` |
+| `pos` | [N, 2] | `(x_pixel, y_pixel)` — used for hard-negative sampling |
 
 ---
 
@@ -70,333 +38,270 @@ Stage 3 — Link & Node Prediction  (link_prediction/)    ← THIS STAGE
 
 ```
 link_prediction/
-  __init__.py          — package exports
-  model.py             — CrackGATEncoder, MLPEdgePredictor, MLPNodePredictor
-  masking.py           — edge masking, node masking utilities
-  train.py             — joint training loop (node task + edge task)
-  evaluate.py          — AUC-ROC, Average Precision, Hits@K, F1
-  visualize.py         — per-graph visualisation + training curves
-  run.py               — CLI entry point (train + eval, or --eval-only)
-  IMPLEMENTATION.md    — this file
+  __init__.py        — package exports
+  splits.py          — transductive edge split + Fix 1 (feature recompute) + Fix 2 (hard negatives)
+  heuristics.py      — Tier 1: CN, AA, RA structural scorers
+  baselines.py       — Tier 1.5: coordinates-only baseline (critical sanity check)
+  metrics.py         — per-graph-then-average: AUC, AP, Hits@K, MRR
+  model.py           — 5 GNN encoders (MLP/GCN/SAGE/GINE/GAT) + edge/node predictor heads
+  masking.py         — node masking utilities (endpoint/junction/random hiding)
+  train.py           — joint training loop (edge task + node task); uses Fix 1
+  evaluate.py        — headline table + ablation sweeps
+  visualize.py       — per-graph prediction visualisation + training curves
+  run.py             — CLI: train + eval a single model
+  compare.py         — CLI: train all 5 encoders, print side-by-side comparison
+  MODEL_RESEARCH.md  — architecture research and model selection justification
+  IMPLEMENTATION.md  — this file
 ```
+
+**Inputs:** `outputs/clean_graphs/graphs/{train,test}_graphs.pt`
+**Outputs:** `outputs/linkpred/`
 
 ---
 
-## Why GAT Over GCN?
+## The Two Critical Fixes
 
-Phase 1 used GCN, GAT, and GraphSAGE. GCN briefly achieved AUC=0.77 at epoch 1 before collapsing to random (AUC=0.50). The root cause was **unnormalized features** on a raw pixel scale (0–1000px) combined with a learning rate of 0.01. The first gradient step overshot and the model permanently predicted 0.5 for everything.
+Both fixes live in `splits.py`. Getting them wrong makes results look good but mean nothing.
 
-Phase 1 recommended GAT as the theoretically correct architecture for crack graphs — crack junctions are heterogeneous (branches of different thickness and orientation should be attended to differently). GAT couldn't demonstrate this in Phase 1 because the attention mechanism was destabilised by unnormalized inputs.
+### Fix 1 — Feature recomputation after masking (prevents label leakage)
 
-**In Phase 3, this is fixed:**
-- Stage 2 normalises all features. Coordinates are `[0, 1]`, not `[0, 1000]`
-- Learning rate is `5e-4` with linear warmup (safe startup, no destructive first steps)
-- GAT receives all 7 edge features — path length, distance, tortuosity, angle, thickness × 3
-- Angle is re-encoded as `[sin(2θ), cos(2θ)]` to remove the 0°/180° discontinuity
+`degree`, `is_endpoint`, `is_junction` (x cols 3–5) are computed on the **full** graph during Stage 2. After hiding edges, a node that lost an edge still reports its old (higher) degree — a fingerprint of where the hidden edge was. The GNN can "predict" hidden edges by reading the stale degree instead of understanding topology.
 
----
-
-## Model Architecture
-
-### CrackGATEncoder (`model.py`)
-
-Three-layer Graph Attention Network with edge features and residual connections.
-
-```
-Input node features [N, 6]:
-  x_norm, y_norm, thickness, degree, is_endpoint, is_junction
-
-Input edge features [E, 7] → internally encoded to [E, 8]:
-  path_length, euclidean_dist, tortuosity,
-  sin(2·angle_sym), cos(2·angle_sym),   ← angle column split into circular pair
-  avg_thickness, min_thickness, max_thickness
-
-Layer 1: GATConv(6 → 128, heads=4, concat=True, edge_dim=8) → [N, 512]
-  LayerNorm → ELU → Dropout(0.3)
-
-Layer 2: GATConv(512 → 128, heads=4, concat=True, edge_dim=8) → [N, 512]
-  LayerNorm → ELU → Dropout(0.3)
-
-Layer 3: GATConv(512 → 64, heads=1, concat=False, edge_dim=8) → [N, 64]
-  + Residual: Linear(512 → 64) applied to layer-2 output
-  LayerNorm
-
-Output: node embeddings [N, 64]
-```
-
-**Design decisions:**
-
-- **3 layers** — crack graphs are sparse (mean degree ≈ 1.8). 3 hops covers most topological neighbourhoods without over-smoothing.
-- **4 attention heads** — each head learns a different aggregation pattern (thickness similarity, spatial proximity, orientation alignment, etc.). Concatenated in layers 1–2 to preserve diversity.
-- **hidden=128, out_dim=64** — larger than the initial prototype (64/32). Necessary to capture the complexity of crack topology across 537 diverse graphs.
-- **Residual connection** in layer 3 — prevents the third layer from forgetting layer-2 representations. Stabilises deep GAT training on small graphs.
-- **ELU activation** — does not produce dead neurons for negative inputs, important when attention coefficients produce small activations.
-- **Angle encoding** — `angle_sym` in `[0°, 180°)` has a discontinuity at the boundary: 0° and 179.9° represent nearly the same direction but are far apart numerically. Encoding as `[sin(2θ), cos(2θ)]` maps the 180° range onto a smooth circle.
-
-### MLPEdgePredictor (`model.py`)
-
-Scores a candidate edge `(u, v)` using a 3-layer MLP.
-
-```
-Input: z_u, z_v  (node embeddings, each [64])
-Concatenate: [z_u ‖ z_v ‖ z_u ⊙ z_v]  → [192]
-  ⊙ = element-wise Hadamard product — captures interaction between the two nodes
-
-Linear(192 → 128) → ReLU → Dropout(0.2)
-Linear(128 → 64)  → ReLU → Dropout(0.2)
-Linear(64 → 1)    → scalar score
-```
-
-**Why Hadamard product?** The dot product `z_u · z_v` captures cosine similarity only. For crack link prediction, two nodes can be connected even if their embeddings are not similar — e.g., a thick endpoint connecting to a thin junction. The MLP with Hadamard product models non-linear, asymmetric relationships between endpoint embeddings.
-
-**Why 3 layers?** The deeper predictor gives the edge scorer more capacity to learn complex matching criteria from the 192-dim interaction vector, improving edge AUC by ~3 points over the 2-layer version.
-
-### MLPNodePredictor (`model.py`)
-
-Binary classifier per node: does this node have a hidden neighbour?
-
-```
-Input: z  (node embedding [64])
-Linear(64 → 64) → ReLU → Dropout(0.2)
-Linear(64 → 32) → ReLU → Dropout(0.2)
-Linear(32 → 1)  → scalar score
-```
-
----
-
-## Training Design
-
-### Two Tasks, Joint Training
-
-Tasks share the encoder but have separate prediction heads. Gradients from both update the encoder simultaneously, forcing it to learn representations that serve both objectives.
-
-### Gradient Accumulation
-
-Rather than one optimizer step per graph (300 steps/epoch for node task, 268 for edge task), gradients are accumulated over 8 graphs before each step. This gives the optimizer more stable gradient estimates — each step sees signal from 8 diverse crack topologies rather than one.
+**Fix:** after the edge split, recompute cols 3–5 from the **observed (message-passing) edges only**. Cols 0–2 are never touched.
 
 ```python
-# Conceptually (actual implementation in train.py):
-optimizer.zero_grad()
-for i, graph in enumerate(graphs):
-    loss = criterion(...) / accum_steps
-    loss.backward()
-    if (i + 1) % accum_steps == 0:
-        clip_grad_norm_(params, 1.0)
-        optimizer.step()
-        optimizer.zero_grad()
+# splits.py
+def recompute_structural_features(x, edge_index_observed, num_nodes):
+    deg = torch.zeros(num_nodes)
+    deg.scatter_add_(0, edge_index_observed[0], torch.ones(edge_index_observed.size(1)))
+    x = x.clone()
+    x[:, 3] = deg
+    x[:, 4] = (deg == 1).float()   # is_endpoint
+    x[:, 5] = (deg >= 3).float()   # is_junction
+    return x
 ```
 
-### Learning Rate Schedule
+**Verification:** for any graph with hidden edges, assert that recomputed x[:,3:6] ≠ stored values. If identical, the recompute is not wired in (see sanity check §6).
 
-Linear warmup for 10 epochs followed by cosine annealing to 1% of peak LR. The warmup prevents destructive large gradient steps in the first few epochs when the randomly-initialised heads produce large, noisy gradients.
+This fix is applied in both `splits.py` (for heuristics/baselines/GNN evaluation) and `train.py` (during training).
 
-```
-Epochs 1–10:   LR linearly rises 0 → 5e-4
-Epochs 11–300: LR follows cosine from 5e-4 → 5e-6
-```
+### Fix 2 — Hard negative sampling (forces topology use, not distance)
 
-### Validation Metric
+Random negative pairs are almost always far apart. Because node features include position, a model scores "near = real, far = fake" and wins without topology. That defeats the proof.
 
-Best checkpoint selected by **combined score = 0.5 × node_val_auc + 0.5 × edge_val_auc**.
+**Fix:** negatives are **unconnected node pairs that are spatially near each other**, drawn from `pos`. The SAME negative set is used by every model (heuristics, baselines, GNNs) so comparisons are fair.
 
-Previously, only edge AUC was used for checkpoint selection — this caused the model to over-optimise the secondary task while ignoring the primary task. The combined metric picks checkpoints that balance both, consistently finding better models across 300 epochs.
-
-- Node AUC is computed by running node masking on all training graphs with a fixed seed (99) — separate from the random seeds used during training.
-- Edge AUC uses the intra-graph val edges (10% of edges per graph, split by `RandomLinkSplit`).
-
-### Loss Function
-
-```
-loss = node_loss + edge_loss_weight × edge_loss
+```python
+# splits.py
+def sample_hard_negatives(pos, existing_edges_set, num_neg, k_near=10):
+    # for each anchor, consider its k nearest neighbours in pixel space
+    # keep unconnected pairs; dedup, shuffle, take num_neg
+    ...
 ```
 
-`edge_loss_weight = 1.0` — equal weight for both tasks. The original value of 0.5 starved the edge task, contributing to lower edge AUC. Increasing to 1.0 improved edge AUC by ~7 points.
-
-### Optimizer
-
-AdamW with weight_decay=1e-4. AdamW decouples weight decay from the gradient update (unlike Adam's L2 regularisation), providing cleaner regularisation for transformer-style architectures with LayerNorm.
+If the coordinates-only baseline rivals the GNN, the negatives are still too easy — increase `k_near` or check that `pos` is being used.
 
 ---
 
-## Masking Strategy (`masking.py`)
+## Split Protocol (`splits.py`)
 
-### Task 1: Node Masking
+Transductive setup (recommended, start here): for each graph, split undirected edges 80/10/10 into message-passing / val positives / test positives. Generate hard negatives for val/test. Recompute node features from observed edges.
 
-1. Identify all endpoint nodes (`is_endpoint == 1`)
-2. Randomly hide `mask_frac=0.20` of them — zero their features, remove incident edges
-3. Label visible nodes: 1 if connected to a removed endpoint, 0 otherwise
-4. Evaluate on visible, non-isolated nodes only
+```python
+from link_prediction.splits import transductive_split, prepare_dataset
 
-**Validity:** graph must have ≥ 2 endpoint nodes. All 300 training graphs pass.
+splits = prepare_dataset(graphs, num_val=0.10, num_test=0.10, k_near=10, seed=42)
+# splits[i] is a dict: train_data, val_ei, val_labels, test_ei, test_labels, ...
+```
 
-### Task 2: Edge Masking
-
-`RandomLinkSplit` removes 10% of edges into a validation set for checkpoint selection (0% test — test graphs are completely separate). Negative sampling ratio 1:1.
-
-**Validity:** graph must have ≥ 4 edges (8 directed entries). 268 / 300 training graphs pass.
+`RandomLinkSplit` partitions the edges; `splits.py` replaces its random negatives with hard negatives and applies the feature recompute. Graphs with fewer than 4 undirected edges are skipped.
 
 ---
 
-## Evaluation Metrics (`evaluate.py`)
+## Approaches (two tiers)
 
-### Edge Task
+### Tier 1 — Structural heuristics (`heuristics.py`)
+Non-learning, topology only. The floor the GNN must beat.
 
-| Metric | What it measures |
-|--------|-----------------|
-| **AUC-ROC** | Probability that a real edge is ranked higher than a fake edge. 0.5 = random, 1.0 = perfect. |
-| **Average Precision** | Area under Precision-Recall curve. Better than AUC when positives are sparse. |
-| **Hits@10** | Among true hidden edges, what fraction appear in the model's top-10 scored pairs per graph. |
-| **Hits@20** | Same with a larger candidate list. |
+| Heuristic | Score for pair (u, v) |
+|-----------|----------------------|
+| **Common Neighbors (CN)** | `|Γ(u) ∩ Γ(v)|` |
+| **Adamic-Adar (AA)** | `Σ_{w∈CN} 1/log|Γ(w)|` |
+| **Resource Allocation (RA)** | `Σ_{w∈CN} 1/|Γ(w)|` |
 
-### Node Task
+Scored on the observed (message-passing) graph. Crack skeleton graphs are locally tree-like, so CN/AA/RA may be weak (few common neighbours between crack tips). That is fine — a low floor that the GNN clears convincingly is a clean result.
 
-| Metric | What it measures |
-|--------|-----------------|
-| **AUC-ROC** | Discriminative ability for missing-neighbour classification. Primary metric. |
-| **Average Precision** | PR-AUC — handles class imbalance (most nodes do NOT have hidden neighbours). |
-| **F1 Score** | At threshold=0.5. Low F1 is expected due to class imbalance — trust AUC. |
+### Tier 1.5 — Coordinates-only baseline (`baselines.py`)
+Score pairs by `1/(1 + Euclidean pixel distance)`, no message passing. **We want this to lose.** Its losing proves the task needs topology, not proximity. If it rivals the GNN, return to Fix 2.
 
----
+### Tier 2a — GAE-style GNN encoder + decoder (`model.py`, `train.py`)
+Node-based: encode all nodes via GNN (GraphSAGE/GCN/GINE/GAT), then score a pair by combining their embeddings with the MLP decoder. Fix 1 applied before every forward pass.
 
-## Final Results (DeepCrack test set, 237 graphs)
+### Tier 2b — SEAL subgraph classifier (`seal.py` — future)
+SEAL extracts the h-hop enclosing subgraph around each target link and classifies it with a GNN using the double-radius node labelling trick. Most direct "model uses local topology" architecture; strongest claim if it beats GAE. Planned; not yet implemented.
 
-Best epoch: **260 / 300** | Best val score: **0.7848**
-
-### Task 1: Node Prediction
-
-| Metric | Value |
-|---|---|
-| AUC-ROC | **0.8321** |
-| Avg Precision | 0.4230 |
-| F1 Score | 0.2518 |
-
-### Task 2: Edge Prediction
-
-| Metric | Value |
-|---|---|
-| AUC-ROC | **0.7247** |
-| Avg Precision | 0.6863 |
-| Hits@10 | 0.8500 |
-| Hits@20 | **0.9622** |
-
-### Interpretation
-
-- **Node AUC 0.83** — the model correctly ranks nodes with missing neighbours 83% of the time. The model has internalised what a complete crack network looks like.
-- **Edge AUC 0.72** — solid link prediction on small, sparse graphs. Exceeds the 0.70 threshold for the research claim.
-- **Hits@20 = 0.96** — in the top-20 candidates, 96% of true hidden edges are found. Strong practical retrieval quality.
-- **Node F1 0.25** — low due to class imbalance (crack tips are a small fraction of all nodes). AUC is the correct metric; F1 at a fixed threshold of 0.5 is misleading here.
-
-### Before vs After Tuning
-
-| Metric | Before (150ep, old config) | After (300ep, tuned) | Δ |
-|---|---|---|---|
-| Node AUC | 0.8677 | 0.8321 | -0.036 |
-| Node Avg Prec | 0.4068 | 0.4230 | +0.016 |
-| Node F1 | 0.1355 | 0.2518 | **+0.116** |
-| Edge AUC | 0.6548 | 0.7247 | **+0.070** |
-| Edge Avg Prec | 0.6309 | 0.6863 | +0.055 |
-| Hits@10 | 0.8280 | 0.8500 | +0.022 |
-| Hits@20 | 0.9478 | 0.9622 | +0.014 |
-
-Node AUC's slight decrease is an expected and acceptable tradeoff — the model is now more balanced across both tasks rather than over-specialised on the primary task.
+### Structure-only ablation
+Run the GNN twice: once with full x, once with x[:,0:3] replaced by a constant (spatial/feature information stripped). If the GNN still beats the heuristics with no informative node features, the proof is cleanest: *the model reads topology, not features.*
 
 ---
 
-## Comparison with Phase 1
+## Model Architecture (`model.py`)
 
-| Aspect | Phase 1 | Phase 3 |
-|--------|---------|---------|
-| Node features | 3 (raw pixel x, y, window thickness) | 6 (normalised coords, dist-transform thickness, degree, endpoint/junction flags) |
-| Edge features | 4 (unnormalised) | 7 → 8 with circular angle encoding |
-| Feature scale | 0–1000 px (raw) | 0–1 (normalised) |
-| Architecture | GCN / GAT / SAGE (1-layer) | 3-layer GAT with residuals, LayerNorm |
-| Model size | hidden=16–32 | hidden=128, out_dim=64 |
-| Edge predictor | Dot product | 3-layer MLP with Hadamard product |
-| Node prediction task | None | Yes (missing endpoint detection) |
-| Optimizer | Adam, lr=0.01 | AdamW, lr=5e-4 + warmup |
-| Gradient accumulation | No | Yes (8 graphs/step) |
-| Validation metric | Edge AUC only | 0.5×node_auc + 0.5×edge_auc |
-| Training stability | Collapsed to AUC=0.50 after epoch 1 | Stable, improving through 300 epochs |
-| Best edge AUC | 0.77 (epoch 1, then 0.50) | **0.72** (sustained, epoch 260) |
-| Node AUC | N/A | **0.83** |
+Five encoder architectures, all sharing the same `MLPEdgePredictor` and `MLPNodePredictor` heads.
+
+| Encoder | Graph structure | Edge features | Use |
+|---------|----------------|---------------|-----|
+| `MLPEncoder` | No | No | No-graph lower bound |
+| `GCNEncoder` | Yes | No | Bare topology, no edge attrs |
+| `SAGEEncoder` | Yes | No | Inductive aggregation, no edge attrs |
+| `GINEEncoder` | Yes | Yes (8-dim) | Expressive + edge features |
+| `CrackGATEncoder` | Yes + attention | Yes (8-dim) | Heterogeneous crack junctions |
+
+**CrackGATEncoder** — 3 layers, 4 attention heads, hidden=128, out_dim=64, residual connection between layers 2 and 3, LayerNorm after each layer.
+
+**Angle encoding** — the raw `angle_sym` column (degrees, [0°,180°)) has a boundary discontinuity. It is encoded as `[sin(2θ), cos(2θ)]` inside the encoder (7 → 8 edge dims), mapping the range onto a smooth circle.
+
+**`MLPEdgePredictor`** — scores pair (u,v) using `MLP([z_u ‖ z_v ‖ z_u⊙z_v])`. The Hadamard product captures non-linear interaction between endpoint embeddings, stronger than inner product alone.
+
+**`MLPNodePredictor`** — binary classifier per node for the node masking task (does this node have a hidden neighbour?). Kept for joint training but not part of the headline link prediction comparison.
+
+---
+
+## Training (`train.py`)
+
+Joint training of the encoder + edge predictor + node predictor. Fix 1 (feature recompute) is applied to every edge split before the forward pass.
+
+```
+Loss = node_loss + edge_loss_weight × edge_loss   (default weight = 0.5)
+```
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Optimizer | AdamW | weight_decay=1e-4 |
+| LR | 5e-4 | with linear warmup |
+| Warmup | 10 epochs | 0 → lr, then cosine to lr×0.01 |
+| Gradient accumulation | 8 graphs/step | more stable estimates on tiny graphs |
+| Checkpoint metric | 0.5×node_AUC + 0.5×edge_AUC | best of both tasks |
+| Epochs (run.py) | 400 | |
+| Epochs (compare.py) | 200 | |
+
+Note: training still uses `RandomLinkSplit` negatives internally (fast). For the **final reported evaluation** — the headline table — `splits.py` hard negatives are used.
+
+---
+
+## Evaluation Metrics (`metrics.py`, `evaluate.py`)
+
+Link prediction is **highly imbalanced** (few real edges, many possible non-edges).
+
+| Metric | Report? | Why |
+|--------|---------|-----|
+| **AUC-ROC** | **Always** | Comparability anchor to prior papers; every LP paper reports it. Flatters under imbalance — don't lean conclusions on it, but its absence looks odd to reviewers. |
+| **Average Precision (AP)** | **Yes — primary** | Honest under imbalance. Weight conclusions here. |
+| **Hits@K** (K=20, 50) | Yes | "Of top-K predicted links, how many are real?" Used by Neo-GNNs / OGB; maps directly to our question. |
+| **MRR** | Yes | Single ranking-quality summary. |
+| **Accuracy** | **No** | Meaningless under imbalance (predict "no edge" everywhere → ~95%). |
+
+**Critical rule — per-graph then average.** Graphs range from 3 to 1003 nodes. Pooling all candidate pairs lets giant graphs dominate and hides failure on small ones. Compute each metric **per graph, then average across graphs** (report mean ± std). `metrics.py` enforces this.
+
+**Fairness rule.** Every approach is scored on the **same edge split and the same hard-negative set**. `splits.py` builds the split once; all approaches consume it.
+
+### Headline results table
+
+`evaluate.headline_table()` runs all approaches on the same splits and returns:
+
+| Approach | AUC | AP | Hits@20 | Hits@50 | MRR |
+|----------|-----|----|---------|---------|-----|
+| Common Neighbors | | | | | |
+| Adamic-Adar | | | | | |
+| Resource Allocation | | | | | |
+| Coordinates-only | | | | | |
+| GNN (GAE) | | | | | |
+| GNN (structure-only) | | | | | |
+
+Story the table should tell: GNNs > heuristics; all > coordinates-only; SEAL ≥ GAE (once implemented).
+
+---
+
+## Mandatory Sanity Checks
+
+1. **Coordinates-only must lose.** If it rivals the GNN → negatives too easy → fix `k_near` in `splits.py`.
+2. **Leak check.** For any graph with hidden edges, confirm recomputed x[:,3:6] ≠ Stage 2 stored values. If identical → Fix 1 not wired in.
+3. **Negative reuse.** Confirm identical negative sets (from `splits.py`) are used across all models for the same graph.
+4. **Per-graph aggregation.** Confirm metrics are averaged per-graph, not pooled. `metrics.aggregate()` does this.
+5. **Tiny-graph behaviour.** Graphs with < 5 edges yield unstable per-graph metrics. Report how they are handled (include with care, or report alongside a min-edge subset).
 
 ---
 
 ## Usage
 
-**Full training + evaluation (tuned defaults):**
+**Train and evaluate a single model:**
 ```bash
 cd crack-topology-gnn
 python3 link_prediction/run.py \
-    --train-graphs outputs/graphs/graphs/train_graphs.pt \
-    --test-graphs  outputs/graphs/graphs/test_graphs.pt \
-    --output-dir   outputs/link_prediction
+    --train-graphs outputs/clean_graphs/graphs/train_graphs.pt \
+    --test-graphs  outputs/clean_graphs/graphs/test_graphs.pt \
+    --output-dir   outputs/linkpred \
+    --model gat \
+    --epochs 400
 ```
 
-**Evaluate from saved checkpoint only:**
+**Multi-model comparison (all 5 encoders):**
 ```bash
-python3 link_prediction/run.py \
-    --train-graphs outputs/graphs/graphs/train_graphs.pt \
-    --test-graphs  outputs/graphs/graphs/test_graphs.pt \
-    --output-dir   outputs/link_prediction \
-    --eval-only
+python3 link_prediction/compare.py \
+    --train-graphs outputs/clean_graphs/graphs/train_graphs.pt \
+    --test-graphs  outputs/clean_graphs/graphs/test_graphs.pt \
+    --output-dir   outputs/comparison \
+    --epochs 200
 ```
 
-**Key CLI arguments:**
+**Quick sanity check (subsample):**
+```bash
+python3 link_prediction/compare.py \
+    --train-graphs outputs/clean_graphs/graphs/train_graphs.pt \
+    --test-graphs  outputs/clean_graphs/graphs/test_graphs.pt \
+    --num-train-graphs 500 \
+    --epochs 50
+```
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--epochs` | 300 | Training epochs |
-| `--hidden` | 128 | GAT hidden dimension per head |
-| `--out-dim` | 64 | Node embedding output dimension |
-| `--heads` | 4 | Number of attention heads |
-| `--dropout` | 0.3 | Dropout rate in encoder and predictors |
-| `--lr` | 5e-4 | AdamW learning rate |
-| `--weight-decay` | 1e-4 | AdamW weight decay |
-| `--edge-loss-weight` | 1.0 | λ — weight of edge task loss |
-| `--node-mask-frac` | 0.20 | Fraction of endpoints hidden per graph per epoch |
-| `--accum-steps` | 8 | Graphs accumulated per optimizer step |
-| `--warmup-epochs` | 10 | Linear LR warmup epochs |
-| `--eval-only` | off | Load checkpoint from --output-dir, skip training |
-| `--vis-n` | 10 | Number of test graphs to visualise (-1 = all) |
+**Key CLI flags (`run.py`):**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `gat` | `mlp`, `gcn`, `sage`, `gine`, `gat` |
+| `--epochs` | 400 | Training epochs |
+| `--hidden` | 128 | Hidden dimension |
+| `--out-dim` | 64 | Node embedding dimension |
+| `--edge-loss-weight` | 0.5 | λ for edge task loss |
+| `--node-mask-frac` | 0.20 | Fraction of endpoints hidden per graph |
+| `--accum-steps` | 8 | Graphs per optimizer step |
+| `--warmup-epochs` | 10 | Linear LR warmup |
+| `--eval-only` | off | Load checkpoint, skip training |
+| `--ablation` | off | Run mask_frac × node_type sweep |
 
 **Output files:**
 ```
-outputs/link_prediction/
-  best_model.pt          — encoder + edge_pred + node_pred weights (epoch 260)
-  metrics.json           — all evaluation metrics on the test set
-  training_curves.png    — node loss, edge loss, node AUC, edge AUC, combined score
-  visualizations/
-    <filename>.png       — 2-panel: edge predictions + node predictions per graph
+outputs/linkpred/
+  best_model.pt          — best checkpoint (val combined AUC)
+  metrics.json           — all test set metrics
+  training_curves.png
+  visualizations/        — per-graph prediction panels
+
+outputs/comparison/
+  comparison_results.json
+  comparison_curves.png
+  <model_name>/best_model.pt, metrics.json, training_curves.png
 ```
 
 ---
 
-## Visualisation Guide
+## References
 
-Each output PNG shows two panels:
-
-**Left panel — Edge Prediction:**
-- Blue lines: visible crack segments (80% of edges, given to the model)
-- Red dashed: correctly predicted missing edges (true positive)
-- Grey dashed: missed edges (false negative)
-
-**Right panel — Node Prediction:**
-- Green nodes: True Positive — correctly identified as having a hidden neighbour
-- Red nodes: False Positive — wrongly flagged
-- Light grey nodes: True Negative — correctly identified as complete
-- Orange nodes: False Negative — had a hidden neighbour the model missed
-- Yellow ✕: the removed endpoint nodes (not visible to the model)
-
----
-
-## What the Results Prove
-
-| Metric | Threshold | Achieved | Claim |
-|--------|-----------|----------|-------|
-| Edge AUC-ROC | > 0.70 | **0.7247** ✅ | Model ranks real edges above fake edges 72% of the time |
-| Edge AP | > 0.65 | **0.6863** ✅ | Model surfaces real edges early in its ranked list |
-| Hits@20 | > 0.60 | **0.9622** ✅ | In top 20 candidates, 96% of real edges are found |
-| Node AUC | > 0.65 | **0.8321** ✅ | Model identifies incomplete nodes far better than chance |
-
-**Conclusion:** The GNN has learned the structural grammar of crack networks and can infer missing topology from partial observations — a strong proxy for the crack evolution understanding the project originally aimed for.
+| Paper | Use |
+|-------|-----|
+| Zhang & Chen, SEAL (NeurIPS 2018) | Subgraph LP; planned Tier 2b |
+| Yun et al., Neo-GNNs (NeurIPS 2021) | CN/AA/RA baselines; optional model |
+| Kipf & Welling, GAE (NIPS Workshop 2016) | GAE node-based LP baseline |
+| Hamilton et al., GraphSAGE (NeurIPS 2017) | Encoder |
+| Hu et al., OGB (NeurIPS 2020) | Hits@K / MRR evaluation protocol |
+| Adamic & Adar (Social Networks 2003) | Adamic-Adar heuristic |
+| Zhou, Lü, Zhang (Eur. Phys. J. B 2009) | Resource Allocation heuristic |

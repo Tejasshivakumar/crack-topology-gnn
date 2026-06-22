@@ -93,6 +93,18 @@ def compute_stats(dataset: list) -> dict:
     }
 
 
+def _curation_entry(n_converted: int, skip_counts: dict) -> dict:
+    """Build the curation funnel dict that goes into stats.json."""
+    raw = n_converted + sum(skip_counts.values())
+    return {
+        'raw_masks':            raw,
+        'skipped_empty_mask':   skip_counts.get('empty_mask',  0),
+        'skipped_empty_graph':  skip_counts.get('empty_graph', 0),
+        'skipped_degenerate':   skip_counts.get('degenerate',  0),
+        'converted':            n_converted,
+    }
+
+
 # ── Core processing ───────────────────────────────────────────────────────────
 
 def process_split(
@@ -103,10 +115,12 @@ def process_split(
     vis_dir: str,
     do_vis: bool,
     vis_n: int,
-) -> list:
+    prune_ratio: float = 0.1,
+    min_nodes: int = 3,
+) -> tuple:
     """
     Process all masks in mask_dir for one split.
-    Returns the list of saved PyG Data objects.
+    Returns (dataset, skip_counts) where skip_counts is the curation funnel.
     """
     mask_files = sorted(
         f for f in glob.glob(os.path.join(mask_dir, '*'))
@@ -114,22 +128,26 @@ def process_split(
     )
     if not mask_files:
         print(f'[{split}] No mask files found in {mask_dir}')
-        return []
+        return [], {}
 
     print(f'\n[{split}] Processing {len(mask_files)} masks from: {mask_dir}')
+    print(f'[{split}] prune_ratio={prune_ratio}  min_nodes={min_nodes}')
 
     if do_vis:
         os.makedirs(vis_dir, exist_ok=True)
 
-    dataset = []
-    skipped = 0
+    dataset   = []
     vis_count = 0
+    skip_counts = {'empty_mask': 0, 'empty_graph': 0, 'degenerate': 0}
 
     for mask_path in tqdm(mask_files, desc=f'{split}'):
-        data, skeleton, nx_graph = mask_to_graph(mask_path, split=split)
+        data, skeleton, nx_graph, skip_reason = mask_to_graph(
+            mask_path, split=split,
+            prune_ratio=prune_ratio, min_nodes=min_nodes,
+        )
 
         if data is None:
-            skipped += 1
+            skip_counts[skip_reason] += 1
             continue
 
         dataset.append(data)
@@ -152,7 +170,12 @@ def process_split(
                             original_image=original, save_path=save_path)
             vis_count += 1
 
-    print(f'[{split}] Converted: {len(dataset)}  |  Skipped (empty): {skipped}')
+    total_skipped = sum(skip_counts.values())
+    print(f'[{split}] Converted: {len(dataset)}  |  '
+          f'Skipped: {total_skipped}  '
+          f'(empty_mask={skip_counts["empty_mask"]}, '
+          f'empty_graph={skip_counts["empty_graph"]}, '
+          f'degenerate={skip_counts["degenerate"]})')
     if do_vis:
         print(f'[{split}] Visualisations saved: {vis_count} → {vis_dir}')
 
@@ -161,7 +184,7 @@ def process_split(
     torch.save(dataset, pt_path)
     print(f'[{split}] Graphs saved → {pt_path}')
 
-    return dataset
+    return dataset, skip_counts
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -193,6 +216,13 @@ def parse_args():
                    ),
                    help='Root output directory.')
 
+    # Spur pruning + degenerate filter
+    p.add_argument('--prune-ratio', type=float, default=0.1,
+                   help='Remove leaf branches shorter than this fraction of the longest '
+                        'branch. 0.0 disables pruning. (default: 0.1)')
+    p.add_argument('--min-nodes', type=int, default=3,
+                   help='Drop graphs with fewer nodes than this after pruning. (default: 3)')
+
     # Visualisation
     p.add_argument('--vis',    action='store_true', default=True,
                    help='Save visualisations (default: True).')
@@ -222,6 +252,14 @@ def main():
 
     all_stats = {}
 
+    shared_kwargs = dict(
+        graphs_dir=graphs_dir,
+        do_vis=args.vis,
+        vis_n=args.vis_n,
+        prune_ratio=args.prune_ratio,
+        min_nodes=args.min_nodes,
+    )
+
     if args.deepcrack_root:
         root = args.deepcrack_root
         splits_cfg = [
@@ -232,28 +270,28 @@ def main():
             if not os.path.isdir(mask_dir):
                 print(f'Skipping {split} — not found: {mask_dir}')
                 continue
-            dataset = process_split(
+            dataset, skip_counts = process_split(
                 mask_dir=mask_dir,
                 split=split,
                 image_dir=image_dir if os.path.isdir(image_dir) else None,
-                graphs_dir=graphs_dir,
                 vis_dir=os.path.join(vis_root, split),
-                do_vis=args.vis,
-                vis_n=args.vis_n,
+                **shared_kwargs,
             )
             all_stats[split] = compute_stats(dataset)
+            all_stats[split]['curation'] = _curation_entry(
+                len(dataset), skip_counts)
 
     elif args.mask_dir:
-        dataset = process_split(
+        dataset, skip_counts = process_split(
             mask_dir=args.mask_dir,
             split=args.split,
             image_dir=args.image_dir,
-            graphs_dir=graphs_dir,
             vis_dir=os.path.join(vis_root, args.split),
-            do_vis=args.vis,
-            vis_n=args.vis_n,
+            **shared_kwargs,
         )
         all_stats[args.split] = compute_stats(dataset)
+        all_stats[args.split]['curation'] = _curation_entry(
+            len(dataset), skip_counts)
 
     else:
         print('Error: provide --deepcrack-root or --mask-dir.')
@@ -270,12 +308,19 @@ def main():
     for split, stats in all_stats.items():
         if not stats:
             continue
+        cur = stats.get('curation', {})
         print(f'\n{split.upper()}:')
         print(f'  graphs          : {stats["num_graphs"]}')
         print(f'  nodes  mean/max : {stats["nodes_mean"]:.1f} / {stats["nodes_max"]}')
         print(f'  edges  mean/max : {stats["edges_mean"]:.1f} / {stats["edges_max"]}')
         print(f'  crack density   : mean={stats["crack_density_mean"]:.4f}  '
               f'max={stats["crack_density_max"]:.4f}')
+        if cur:
+            print(f'  curation funnel : {cur.get("raw_masks")} raw  →  '
+                  f'{cur.get("skipped_empty_mask")} empty_mask  '
+                  f'{cur.get("skipped_empty_graph")} empty_graph  '
+                  f'{cur.get("skipped_degenerate")} degenerate  '
+                  f'→  {cur.get("converted")} converted')
     print()
 
 
