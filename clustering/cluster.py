@@ -24,7 +24,7 @@ from tqdm import tqdm
 from skimage import io, morphology, color
 from skimage.util import img_as_bool
 from sklearn.cluster import SpectralClustering, KMeans
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 
@@ -104,62 +104,83 @@ def mask_to_graph(binary: np.ndarray, prune_ratio: float) -> nx.Graph:
 # ──────────────────────────────────────────────
 def extract_features(graph: nx.Graph) -> dict:
     """
-    14 structural features that capture crack TYPE differences:
-      topology  → cyclomatic complexity, degree stats
-      shape     → branching ratio, tortuosity
-      scale     → total length, node density
+    11 scale-invariant structural features for crack type clustering.
+    All raw counts are converted to per-node ratios so that a small
+    alligator crack and a large alligator crack land in the same cluster.
+    Raw counts (n_nodes, n_edges, total_length, …) are excluded.
     """
     n_nodes    = graph.number_of_nodes()
     n_edges    = graph.number_of_edges()
     components = nx.number_connected_components(graph)
     cyclomatic = max(n_edges - n_nodes + components, 0)
 
-    degrees      = [d for _, d in graph.degree()]
-    avg_degree   = float(np.mean(degrees))   if degrees else 0.0
-    max_degree   = float(max(degrees))       if degrees else 0.0
-    n_endpoints  = sum(1 for d in degrees if d == 1)
-    n_junctions  = sum(1 for d in degrees if d >= 3)
-    branching    = n_junctions / max(n_endpoints, 1)
+    degrees     = [d for _, d in graph.degree()]
+    avg_degree  = float(np.mean(degrees)) if degrees else 0.0
+    max_degree  = float(max(degrees))     if degrees else 0.0
+    n_endpoints = sum(1 for d in degrees if d == 1)
+    n_junctions = sum(1 for d in degrees if d >= 3)
+
+    eps = 1e-6  # guard against division by zero in all ratios
+
+    # --- shape ratios (the clustering signal) ---
+    branching_ratio    = n_junctions / max(n_endpoints, 1)  # cap at n_junctions when no endpoints
+    junctions_per_node = n_junctions / max(n_nodes,    eps)
+    endpoints_per_node = n_endpoints / max(n_nodes,    eps)
+    cyclomatic_per_node = cyclomatic / max(n_nodes,    eps)
+    edges_per_node     = n_edges     / max(n_nodes,    eps)
+    components_per_node = components / max(n_nodes,    eps)
 
     edge_lengths = [d.get("weight", 1.0) for _, _, d in graph.edges(data=True)]
-    total_length = float(sum(edge_lengths))
     avg_length   = float(np.mean(edge_lengths)) if edge_lengths else 0.0
     std_length   = float(np.std(edge_lengths))  if edge_lengths else 0.0
+    # coefficient of variation — segment-length irregularity, scale-free
+    cv_length = std_length / max(avg_length, eps)
 
     tortuosities = []
     for u, v, data in graph.edges(data=True):
         pos_u = graph.nodes[u].get("o", np.zeros(2))
         pos_v = graph.nodes[v].get("o", np.zeros(2))
         euc   = float(np.linalg.norm(pos_u - pos_v))
-        tortuosities.append(data.get("weight", 1.0) / max(euc, 1e-6))
+        tortuosities.append(data.get("weight", 1.0) / max(euc, eps))
     avg_tortuosity = float(np.mean(tortuosities)) if tortuosities else 1.0
 
+    # node_density = nodes per bounding-box pixel² — measures spatial compactness
     node_density = 0.0
     if n_nodes > 1 and "o" in graph.nodes[list(graph.nodes)[0]]:
-        positions  = np.array([graph.nodes[n]["o"] for n in graph.nodes()])
-        bbox_area  = (
+        positions = np.array([graph.nodes[n]["o"] for n in graph.nodes()])
+        bbox_area = (
             (positions[:, 0].max() - positions[:, 0].min() + 1) *
             (positions[:, 1].max() - positions[:, 1].min() + 1)
         )
         node_density = n_nodes / max(bbox_area, 1.0)
 
     return {
-        "n_nodes": n_nodes, "n_edges": n_edges,
-        "cyclomatic": cyclomatic, "avg_degree": avg_degree,
-        "max_degree": max_degree, "n_endpoints": n_endpoints,
-        "n_junctions": n_junctions, "branching_ratio": branching,
-        "total_length": total_length, "avg_length": avg_length,
-        "std_length": std_length, "avg_tortuosity": avg_tortuosity,
-        "node_density": node_density, "components": components,
+        "avg_degree":          avg_degree,
+        "max_degree":          max_degree,
+        "branching_ratio":     branching_ratio,
+        "junctions_per_node":  junctions_per_node,
+        "endpoints_per_node":  endpoints_per_node,
+        "cyclomatic_per_node": cyclomatic_per_node,
+        "edges_per_node":      edges_per_node,
+        "components_per_node": components_per_node,
+        "avg_tortuosity":      avg_tortuosity,
+        "cv_length":           cv_length,
+        "node_density":        node_density,
+        # raw counts kept for diagnostic / CSV reference but NOT fed to clustering
+        "_n_nodes":  n_nodes,
+        "_n_edges":  n_edges,
     }
 
 
-# Canonical feature column ordering used in saved CSVs
-FEAT_KEYS = (
-    "n_nodes", "n_edges", "cyclomatic", "avg_degree", "max_degree",
-    "n_endpoints", "n_junctions", "branching_ratio", "total_length",
-    "avg_length", "std_length", "avg_tortuosity", "node_density", "components",
+# Scale-invariant feature keys fed to the clustering model
+SHAPE_FEAT_KEYS = (
+    "avg_degree", "max_degree", "branching_ratio",
+    "junctions_per_node", "endpoints_per_node", "cyclomatic_per_node",
+    "edges_per_node", "components_per_node",
+    "avg_tortuosity", "cv_length", "node_density",
 )
+# Diagnostic raw counts written to CSV but excluded from feature matrix
+DIAG_KEYS = ("_n_nodes", "_n_edges")
 
 
 # ──────────────────────────────────────────────
@@ -303,7 +324,7 @@ def graphs_to_records(graphs, split: str, cfg: Config) -> list:
                 skipped_counts["zero_edges"] += 1
                 continue
 
-            fname = getattr(graph, "name", None) or f"pt_graph_{i}"
+            fname = getattr(g, "filename", None) or getattr(graph, "name", None) or f"pt_graph_{i}"
             records.append({"filename": fname, "split": split,
                              **extract_features(graph)})
         except Exception as e:
@@ -365,9 +386,14 @@ def find_optimal_k(X: np.ndarray, max_k: int, random_state: int) -> int:
 # ──────────────────────────────────────────────
 def spectral_cluster(X: np.ndarray, k: int, random_state: int) -> np.ndarray:
     print(f"\n[Spectral Clustering]  k={k}")
-    sc     = SpectralClustering(n_clusters=k, affinity="rbf", gamma=1.0,
-                                assign_labels="kmeans", random_state=random_state,
-                                n_init=20)
+    # nearest_neighbors affinity: build k-NN graph instead of full RBF matrix.
+    # RBF with gamma=1.0 collapses to near-zero for graphs far from the median
+    # in scaled feature space, making spectral decomposition degenerate.
+    n_neighbors = min(15, len(X) - 1)
+    sc = SpectralClustering(n_clusters=k, affinity="nearest_neighbors",
+                            n_neighbors=n_neighbors,
+                            assign_labels="kmeans", random_state=random_state,
+                            n_init=20, n_jobs=-1)
     labels = sc.fit_predict(X)
     print(f"  Silhouette: {silhouette_score(X, labels):.4f}")
     return labels
@@ -386,20 +412,22 @@ def kmeans_cluster(X: np.ndarray, k: int, random_state: int) -> np.ndarray:
 # ──────────────────────────────────────────────
 def save_labels(records, sp_labels, km_labels, out_dir: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
-    out_path    = os.path.join(out_dir, "crack_pseudo_labels.csv")
-    feat_keys   = [k for k in records[0] if k not in ("filename", "split")]
+    out_path = os.path.join(out_dir, "crack_pseudo_labels.csv")
+    # shape features first, then raw diagnostic counts (_n_nodes, _n_edges)
+    all_feat_keys = list(SHAPE_FEAT_KEYS) + list(DIAG_KEYS)
 
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=[
-            "filename", "split", "spectral_label", "kmeans_label", *feat_keys
+            "filename", "split", "spectral_label", "kmeans_label", *all_feat_keys
         ])
         writer.writeheader()
         for i, rec in enumerate(records):
             writer.writerow({
-                "filename": rec["filename"], "split": rec["split"],
+                "filename":       rec["filename"],
+                "split":          rec["split"],
                 "spectral_label": int(sp_labels[i]),
                 "kmeans_label":   int(km_labels[i]),
-                **{k: rec[k] for k in feat_keys}
+                **{k: rec[k] for k in all_feat_keys}
             })
 
     print(f"\n  Labels saved → {out_path}")
@@ -439,14 +467,59 @@ def visualise(X, sp_labels, km_labels, out_dir: str):
 # ──────────────────────────────────────────────
 def print_summary(records, labels, method: str):
     print(f"\n{'='*55}\n  {method} — Cluster Summary\n{'='*55}")
-    feat_keys = ["n_nodes", "n_edges", "cyclomatic", "branching_ratio",
-                 "avg_tortuosity", "total_length", "n_junctions", "n_endpoints"]
+    # shape features + raw counts for inspection
+    display_keys = list(SHAPE_FEAT_KEYS) + ["_n_nodes", "_n_edges"]
     for lbl in sorted(set(labels)):
         idx = np.where(labels == lbl)[0]
         print(f"\n  Cluster {lbl}  ({len(idx)} graphs)")
-        for fk in feat_keys:
+        for fk in display_keys:
             vals = [records[i][fk] for i in idx]
             print(f"    {fk:<22}  mean={np.mean(vals):.3f}  std={np.std(vals):.3f}")
+
+
+# ──────────────────────────────────────────────
+# WRITE CLUSTER LABELS BACK TO .pt FILES
+# ──────────────────────────────────────────────
+def save_clustered_pt(train_pt: str, test_pt: str, records: list,
+                      sp_labels: np.ndarray, out_dir: str):
+    """
+    Load the original train/test .pt files, attach g.cluster_label to every
+    graph (spectral label, int), and save as new .pt files in out_dir.
+
+    Graphs that were skipped during feature extraction (too small / degenerate)
+    get cluster_label = -1 so they are easily filtered out at training time.
+    """
+    import torch as _torch
+
+    # Build filename → cluster label lookup from records
+    label_map = {rec["filename"]: int(sp_labels[i]) for i, rec in enumerate(records)}
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    for pt_path, split in [(train_pt, "train"), (test_pt, "test")]:
+        graphs = _torch.load(pt_path, map_location="cpu", weights_only=False)
+        n_labelled = n_skipped = 0
+
+        for g in graphs:
+            fname = getattr(g, "filename", None)
+            if fname and fname in label_map:
+                g.cluster_label = label_map[fname]
+                n_labelled += 1
+            else:
+                g.cluster_label = -1   # degenerate / not clustered
+                n_skipped += 1
+
+        out_path = os.path.join(out_dir, f"{split}_graphs_clustered.pt")
+        _torch.save(graphs, out_path)
+        print(f"  Saved {split} clustered graphs → {out_path}")
+        print(f"    labelled={n_labelled}  skipped/degenerate={n_skipped}")
+
+        # Print cluster distribution
+        from collections import Counter
+        dist = Counter(g.cluster_label for g in graphs)
+        for lbl, cnt in sorted(dist.items()):
+            tag = "degenerate" if lbl == -1 else f"cluster {lbl}"
+            print(f"    {tag}: {cnt} graphs")
 
 
 # ──────────────────────────────────────────────
@@ -489,11 +562,21 @@ def main():
     if len(records) < 4:
         sys.exit("Not enough valid graphs — check your dataset paths.")
 
-    # 2. Feature matrix
-    feat_keys = [k for k in records[0] if k not in ("filename", "split")]
-    X         = np.array([[r[k] for k in feat_keys] for r in records])
-    X_scaled  = StandardScaler().fit_transform(X)
-    print(f"Feature matrix: {X.shape}")
+    # 2. Feature matrix — scale-invariant shape features only
+    X = np.array([[r[k] for k in SHAPE_FEAT_KEYS] for r in records])
+    # Sanity check: no NaN/inf (would indicate a ratio blew up despite eps guards)
+    bad = np.sum(~np.isfinite(X))
+    if bad:
+        print(f"  WARNING: {bad} non-finite values in feature matrix — check epsilon guards")
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Ratios are naturally bounded so winsorization is mild; clip at 99th pct
+    # only as a safety net for any remaining edge cases
+    p99 = np.percentile(X, 99, axis=0)
+    X   = np.clip(X, None, p99)
+
+    X_scaled = RobustScaler().fit_transform(X)
+    print(f"Feature matrix: {X.shape}  shape-only features, winsorized at 99th pct, RobustScaler")
 
     # 3. Choose K
     k = cfg.N_CLUSTERS if cfg.N_CLUSTERS else find_optimal_k(
@@ -513,13 +596,36 @@ def main():
     print(f"\n  Method agreement: {agreement:.1f}%  "
           f"(high = clusters are stable and reliable)")
 
-    # 7. Save + visualise
+    # 7. Size-correlation diagnostic — if |r| > 0.5 size leaked back in
+    n_nodes_arr = np.array([r["_n_nodes"] for r in records], dtype=float)
+    corr = float(np.corrcoef(sp_labels.astype(float), n_nodes_arr)[0, 1])
+    print(f"\n[Size-correlation check]  corr(spectral_label, n_nodes) = {corr:+.3f}")
+    if abs(corr) > 0.5:
+        print("  WARNING: high size correlation — clusters may be driven by graph size, not shape")
+    else:
+        print("  OK: low size correlation — clusters reflect crack shape, not size")
+
+    # 8. Save CSV + visualise
     save_labels(records, sp_labels, km_labels, cfg.OUTPUT_DIR)
     visualise(X_scaled, sp_labels, km_labels, cfg.OUTPUT_DIR)
 
+    # 9. Write cluster labels back into the original .pt graph files
+    #    Each graph gets g.cluster_label (int) added as an attribute.
+    #    New files saved alongside the CSV so the GNN training pipeline
+    #    can load them directly and filter/stratify by cluster.
+    if (os.path.isfile(cfg.TRAIN_DIR) and cfg.TRAIN_DIR.endswith(".pt") and
+            os.path.isfile(cfg.TEST_DIR)  and cfg.TEST_DIR.endswith(".pt")):
+        save_clustered_pt(
+            train_pt   = cfg.TRAIN_DIR,
+            test_pt    = cfg.TEST_DIR,
+            records    = records,
+            sp_labels  = sp_labels,
+            out_dir    = cfg.OUTPUT_DIR,
+        )
+
     print("\n✓ Done.")
-    print("  Use the 'spectral_label' column in crack_pseudo_labels.csv "
-          "as your GNN training labels.")
+    print("  spectral_label in crack_pseudo_labels.csv  — for analysis")
+    print("  cluster_label  in *_clustered.pt files     — for GNN training")
 
 
 if __name__ == "__main__":

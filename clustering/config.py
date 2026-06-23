@@ -11,9 +11,9 @@ class Config:
     # Default dataset paths (point to a folder containing image masks).
     # Edit these to the folders that contain your train/test mask images
     # or override via command-line args when running `cluster.py`.
-    TRAIN_DIR  = "clustering/dataset"   # <-- CHANGE THIS if you have separate train/test folders
-    TEST_DIR   = "clustering/dataset"   # <-- CHANGE THIS if you have separate train/test folders
-    OUTPUT_DIR = "outputs"       # where CSV + plots are saved
+    TRAIN_DIR  = "outputs/clean_graphs/graphs/train_graphs.pt"
+    TEST_DIR   = "outputs/clean_graphs/graphs/test_graphs.pt"
+    OUTPUT_DIR = "outputs/clustering"
 
     # ── CLUSTERING ─────────────────────────────────────────────────
     # Set N_CLUSTERS to None to auto-detect the best K (recommended).
