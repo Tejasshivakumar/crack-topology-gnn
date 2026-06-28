@@ -48,6 +48,7 @@ class HybridGraphUNet(nn.Module):
         out_channels: int = 2,
         drop_path: float = 0.1,
         dropout: float = 0.1,
+        use_gnn_bottleneck: bool = True,
     ):
         super().__init__()
 
@@ -57,14 +58,18 @@ class HybridGraphUNet(nn.Module):
 
         bn_ch = enc_chs[-1]
 
-        self.bottleneck = nn.Sequential(
-            Grapher(bn_ch, kernel_size=9, dilation=1, conv='edge',
-                    act='relu', bias=True, drop_path=drop_path),
-            FFN(bn_ch, bn_ch * 4, act='relu', drop_path=drop_path),
-            Grapher(bn_ch, kernel_size=9, dilation=2, conv='edge',
-                    act='relu', bias=True, drop_path=drop_path),
-            FFN(bn_ch, bn_ch * 4, act='relu', drop_path=drop_path),
-        )
+        if use_gnn_bottleneck:
+            self.bottleneck = nn.Sequential(
+                Grapher(bn_ch, kernel_size=9, dilation=1, conv='edge',
+                        act='relu', bias=True, drop_path=drop_path),
+                FFN(bn_ch, bn_ch * 4, act='relu', drop_path=drop_path),
+                Grapher(bn_ch, kernel_size=9, dilation=2, conv='edge',
+                        act='relu', bias=True, drop_path=drop_path),
+                FFN(bn_ch, bn_ch * 4, act='relu', drop_path=drop_path),
+            )
+        else:
+            # Ablation: same encoder + decoder, no GNN processing at the bottleneck
+            self.bottleneck = nn.Identity()
         self.bottleneck_drop = nn.Dropout2d(dropout)
 
         # Build decoder dynamically from encoder channels
