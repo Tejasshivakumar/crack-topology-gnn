@@ -18,10 +18,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
-from .masking import make_edge_splitter, apply_node_mask
-
-
-_EDGE_SPLITTER = make_edge_splitter(num_val=0.0, num_test=0.20)
+from .masking import apply_node_mask
+from .splits  import transductive_split
 
 
 def _node_positions(data):
@@ -121,23 +119,23 @@ def visualize_predictions(
     mask, skeleton = _load_background(fname, mask_dir)
     has_bg = mask is not None
 
-    # ── Edge prediction data ──────────────────────────────────────────────────
-    try:
-        train_d, _, test_d = _EDGE_SPLITTER(graph)
-    except Exception:
+    # ── Edge prediction data (hard negatives — consistent with evaluation) ────
+    s = transductive_split(graph, num_val=0.0, num_test=0.20, seed=42)
+    if s is None:
         return
+    train_d = s['train_data']
 
     pos = _node_positions(graph)
 
     with torch.no_grad():
-        x   = test_d.x.to(device)
+        x   = train_d.x.float().to(device)
         ei  = train_d.edge_index.to(device)
-        ea  = train_d.edge_attr.to(device) if train_d.edge_attr is not None else None
-        eli = test_d.edge_label_index.to(device)
+        ea  = train_d.edge_attr.float().to(device) if train_d.edge_attr is not None else None
+        eli = s['test_ei'].to(device)
         z        = encoder(x, ei, ea)
         e_probs  = torch.sigmoid(edge_pred(z, eli)).cpu().numpy()
-        e_labels = test_d.edge_label.numpy()
-        e_edges  = test_d.edge_label_index.numpy()
+        e_labels = s['test_labels'].numpy()
+        e_edges  = s['test_ei'].numpy()
 
     # ── Node prediction data ──────────────────────────────────────────────────
     masked_d, node_labels, hidden_mask, eval_mask = apply_node_mask(
@@ -261,12 +259,12 @@ def visualize_predictions(
 
 def plot_training_curves(history: list, save_path: str = None, dpi: int = 120):
     """Plot losses and validation AUCs over training epochs."""
-    epochs        = [h['epoch']     for h in history]
-    edge_loss     = [h['edge_loss'] for h in history]
-    node_loss     = [h['node_loss'] for h in history]
-    node_val_auc  = [h.get('node_val_auc', h.get('val_auc', 0.5)) for h in history]
-    edge_val_auc  = [h.get('edge_val_auc', h.get('val_auc', 0.5)) for h in history]
-    val_score     = [h.get('val_score',    h.get('val_auc', 0.5)) for h in history]
+    epochs       = [h['epoch']     for h in history]
+    edge_loss    = [h['edge_loss'] for h in history]
+    node_loss    = [h['node_loss'] for h in history]
+    node_val_ap  = [h.get('node_val_ap', h.get('node_val_auc', h.get('val_auc', 0.0))) for h in history]
+    edge_val_ap  = [h.get('edge_val_ap', h.get('edge_val_auc', h.get('val_auc', 0.0))) for h in history]
+    val_score    = [h.get('val_score', 0.0) for h in history]
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     fig.patch.set_facecolor('#1a1a1a')
@@ -280,12 +278,12 @@ def plot_training_curves(history: list, save_path: str = None, dpi: int = 120):
     for spine in ax1.spines.values(): spine.set_edgecolor('#444')
 
     ax2.set_facecolor('#1a1a1a')
-    ax2.plot(epochs, node_val_auc, color='orange',    label='Node val AUC (primary)')
-    ax2.plot(epochs, edge_val_auc, color='royalblue', label='Edge val AUC (secondary)')
-    ax2.plot(epochs, val_score,    color='lime',      label='Combined score (best model)')
-    ax2.axhline(0.5, color='#666', linestyle='--', linewidth=1, label='Random baseline')
-    ax2.set_xlabel('Epoch', color='white'); ax2.set_ylabel('AUC-ROC', color='white')
-    ax2.set_title('Validation AUC', color='white')
+    ax2.plot(epochs, node_val_ap, color='orange',    label='Node val AP (primary)')
+    ax2.plot(epochs, edge_val_ap, color='royalblue', label='Edge val AP (secondary)')
+    ax2.plot(epochs, val_score,   color='lime',      label='Combined score (best model)')
+    ax2.axhline(0.0, color='#666', linestyle='--', linewidth=1, label='Random baseline (AP)')
+    ax2.set_xlabel('Epoch', color='white'); ax2.set_ylabel('Avg Precision', color='white')
+    ax2.set_title('Validation AP (checkpoint criterion)', color='white')
     ax2.tick_params(colors='white'); ax2.legend(labelcolor='white', facecolor='#2a2a2a', fontsize=7)
     ax2.set_ylim(0.4, 1.0)
     for spine in ax2.spines.values(): spine.set_edgecolor('#444')

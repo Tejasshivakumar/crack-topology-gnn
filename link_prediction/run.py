@@ -175,22 +175,40 @@ def main():
     metrics = full_evaluation(encoder, edge_pred, node_pred, test_dataset,
                               torch.device('cpu'))
 
-    print('\n  ── Task 1: Node Prediction (missing crack tips — primary) ──')
-    print(f'  AUC-ROC      : {metrics["node_auc"]:.4f}')
-    print(f'  Avg Prec     : {metrics["node_ap"]:.4f}')
-    print(f'  F1 @ 0.5     : {metrics["node_f1"]:.4f}')
-    print(f'  F1 @ opt thr : {metrics.get("node_f1_opt", 0):.4f}  '
-          f'(threshold={metrics.get("node_thresh_opt", 0.5):.3f})')
-    print(f'  Balanced Acc : {metrics.get("node_bal_acc", 0):.4f}')
+    print('\n  ── Task 1: Node Prediction (missing crack tips — PRIMARY) ──')
+    print(f'  AUC-ROC  : {metrics["node_auc"]:.4f}')
+    print(f'  Avg Prec : {metrics["node_ap"]:.4f}  ← primary metric')
+    print(f'\n  Classification @ threshold = 0.5:')
+    print(f'    TP={metrics.get("node_tp",0):<6}  FP={metrics.get("node_fp",0):<6}'
+          f'  TN={metrics.get("node_tn",0):<6}  FN={metrics.get("node_fn",0):<6}')
+    print(f'    Precision={metrics.get("node_precision",0):.4f}  '
+          f'Recall={metrics.get("node_recall",0):.4f}  '
+          f'F1={metrics["node_f1"]:.4f}')
+    thr = metrics.get("node_thresh_opt", 0.5)
+    print(f'\n  Classification @ optimal threshold = {thr:.3f}:')
+    print(f'    TP={metrics.get("node_opt_tp",0):<6}  FP={metrics.get("node_opt_fp",0):<6}'
+          f'  TN={metrics.get("node_opt_tn",0):<6}  FN={metrics.get("node_opt_fn",0):<6}')
+    print(f'    Precision={metrics.get("node_opt_precision",0):.4f}  '
+          f'Recall={metrics.get("node_opt_recall",0):.4f}  '
+          f'F1-opt={metrics.get("node_f1_opt",0):.4f}  '
+          f'Bal-Acc={metrics.get("node_bal_acc",0):.4f}')
 
     print('\n  ── Task 2: Edge Prediction (missing crack segments — secondary) ──')
     print(f'  AUC-ROC  : {metrics["edge_auc"]:.4f}')
     print(f'  Avg Prec : {metrics["edge_ap"]:.4f}')
-    print(f'  MRR      : {metrics.get("edge_mrr", 0):.4f}')
-    for k in [10, 20]:
-        key = f'edge_hits@{k}'
-        if key in metrics:
-            print(f'  Hits@{k:<3} : {metrics[key]:.4f}')
+    print(f'\n  Classification @ threshold = 0.5:')
+    print(f'    TP={metrics.get("edge_tp",0):<6}  FP={metrics.get("edge_fp",0):<6}'
+          f'  TN={metrics.get("edge_tn",0):<6}  FN={metrics.get("edge_fn",0):<6}')
+    print(f'    Precision={metrics.get("edge_precision",0):.4f}  '
+          f'Recall={metrics.get("edge_recall",0):.4f}  '
+          f'F1={metrics.get("edge_f1_check",0):.4f}')
+    ethr = metrics.get("edge_thresh_opt", 0.5)
+    print(f'\n  Classification @ optimal threshold = {ethr:.3f}:')
+    print(f'    TP={metrics.get("edge_opt_tp",0):<6}  FP={metrics.get("edge_opt_fp",0):<6}'
+          f'  TN={metrics.get("edge_opt_tn",0):<6}  FN={metrics.get("edge_opt_fn",0):<6}')
+    print(f'    Precision={metrics.get("edge_opt_precision",0):.4f}  '
+          f'Recall={metrics.get("edge_opt_recall",0):.4f}  '
+          f'F1-opt={metrics.get("edge_opt_f1_check",0):.4f}')
 
     if not args.eval_only:
         metrics['best_val_score'] = result['best_val_score']
@@ -204,7 +222,7 @@ def main():
     # ── Ablation study ────────────────────────────────────────────────────────
     if args.ablation:
         ablation_results = run_ablation_study(
-            encoder, edge_pred, node_pred, test_dataset, device,
+            encoder, edge_pred, node_pred, test_dataset, torch.device('cpu'),
             mask_fracs=(0.10, 0.20, 0.30, 0.40, 0.50),
             node_types=('endpoint', 'junction', 'random'),
             seed=args.seed,

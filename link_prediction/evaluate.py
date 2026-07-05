@@ -33,7 +33,7 @@ from .masking import (
 from .splits import recompute_structural_features
 
 
-# ── Shared helper ─────────────────────────────────────────────────────────────
+# ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _find_optimal_threshold(labels: np.ndarray, probs: np.ndarray,
                              n_steps: int = 81) -> tuple:
@@ -51,6 +51,34 @@ def _find_optimal_threshold(labels: np.ndarray, probs: np.ndarray,
         if f > best_f1:
             best_f1, best_t = f, t
     return float(best_t), float(best_f1)
+
+
+def _confusion_metrics(labels: np.ndarray, preds: np.ndarray,
+                        prefix: str) -> dict:
+    """
+    Return TP, TN, FP, FN, Precision, Recall, F1 for binary predictions.
+
+    prefix is prepended to every key: e.g. prefix='node' → 'node_tp'.
+    """
+    labels = np.asarray(labels, dtype=np.int32)
+    preds  = np.asarray(preds,  dtype=np.int32)
+    tp = int(((preds == 1) & (labels == 1)).sum())
+    tn = int(((preds == 0) & (labels == 0)).sum())
+    fp = int(((preds == 1) & (labels == 0)).sum())
+    fn = int(((preds == 0) & (labels == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1        = (2 * precision * recall / (precision + recall)
+                 if (precision + recall) > 0 else 0.0)
+    return {
+        f'{prefix}_tp':        tp,
+        f'{prefix}_tn':        tn,
+        f'{prefix}_fp':        fp,
+        f'{prefix}_fn':        fn,
+        f'{prefix}_precision': float(precision),
+        f'{prefix}_recall':    float(recall),
+        f'{prefix}_f1_check':  float(f1),
+    }
 
 
 def _node_metrics_from_arrays(all_labels: np.ndarray,
@@ -105,6 +133,7 @@ def evaluate_edge_task(encoder, edge_pred, dataset, device):
 
     encoder.eval(); edge_pred.eval()
     per_graph = []
+    all_probs, all_labels = [], []
 
     with torch.no_grad():
         for g in dataset:
@@ -125,12 +154,28 @@ def evaluate_edge_task(encoder, edge_pred, dataset, device):
             lbl = s['test_labels'].numpy()
 
             per_graph.append(graph_metrics(sc, lbl, hits_ks=()))
+            all_probs.extend(sc.tolist())
+            all_labels.extend(lbl.tolist())
 
     agg = aggregate(per_graph, hits_ks=())
-    return {
+    result = {
         'edge_auc': agg.get('auc_mean') or 0.0,
         'edge_ap':  agg.get('ap_mean')  or 0.0,
     }
+
+    if all_probs:
+        all_probs_arr  = np.array(all_probs)
+        all_labels_arr = np.array(all_labels)
+        preds_05 = (all_probs_arr >= 0.5).astype(int)
+        result.update(_confusion_metrics(all_labels_arr, preds_05, 'edge'))
+
+        # find optimal edge threshold and add those confusion metrics too
+        opt_t_e, _ = _find_optimal_threshold(all_labels_arr, all_probs_arr)
+        preds_opt_e = (all_probs_arr >= opt_t_e).astype(int)
+        result['edge_thresh_opt'] = float(opt_t_e)
+        result.update(_confusion_metrics(all_labels_arr, preds_opt_e, 'edge_opt'))
+
+    return result
 
 
 def evaluate_node_task(encoder, node_pred, dataset, device,
@@ -139,13 +184,16 @@ def evaluate_node_task(encoder, node_pred, dataset, device,
     Evaluate missing-node prediction on a held-out dataset.
     Baseline strategy: endpoint nodes, 20% masking fraction.
 
-    Now returns extended metrics (node_f1_opt, node_thresh_opt, node_bal_acc)
-    in addition to the original keys (node_auc, node_ap, node_f1) — fully
-    backward-compatible.
+    AP and AUC are computed as per-graph averages (consistent with the edge
+    task) so each graph contributes equally regardless of its size.
+    F1, optimal threshold and balanced accuracy are computed on pooled
+    predictions because threshold selection is more stable on the full
+    distribution.
     """
     encoder.eval(); node_pred.eval()
 
-    all_probs, all_labels = [], []
+    per_ap, per_auc = [], []
+    all_probs_pooled, all_labels_pooled = [], []
 
     with torch.no_grad():
         for i, g in enumerate(dataset):
@@ -170,24 +218,41 @@ def evaluate_node_task(encoder, node_pred, dataset, device,
             probs = torch.sigmoid(node_pred(z))[eval_mask].cpu().numpy()
             lbls  = labels_ev.numpy()
 
-            all_probs.extend(probs)
-            all_labels.extend(lbls)
+            per_ap.append(float(average_precision_score(lbls, probs)))
+            per_auc.append(float(roc_auc_score(lbls, probs)))
+            all_probs_pooled.extend(probs)
+            all_labels_pooled.extend(lbls)
 
-    if not all_labels:
+    if not per_ap:
         return {
             'node_auc': 0.5, 'node_ap': 0.0, 'node_f1': 0.0,
             'node_f1_opt': 0.0, 'node_thresh_opt': 0.5, 'node_bal_acc': 0.5,
         }
 
-    all_probs  = np.array(all_probs)
-    all_labels = np.array(all_labels)
+    # AP and AUC: per-graph average (each graph weighted equally)
+    node_ap  = float(np.mean(per_ap))
+    node_auc = float(np.mean(per_auc))
 
-    metrics = _node_metrics_from_arrays(all_labels, all_probs)
-    # Keep the fixed-threshold F1 under the original key for backward compat
-    metrics['node_f1'] = float(f1_score(all_labels,
-                                         (all_probs >= threshold).astype(int),
-                                         zero_division=0))
-    return metrics
+    # F1, threshold, confusion matrix: pooled (threshold search needs full distribution)
+    all_probs_pooled  = np.array(all_probs_pooled)
+    all_labels_pooled = np.array(all_labels_pooled)
+    opt_t, f1_opt = _find_optimal_threshold(all_labels_pooled, all_probs_pooled)
+    preds_fixed = (all_probs_pooled >= threshold).astype(int)
+    preds_opt   = (all_probs_pooled >= opt_t).astype(int)
+
+    cm_fixed = _confusion_metrics(all_labels_pooled, preds_fixed, 'node')
+    cm_opt   = _confusion_metrics(all_labels_pooled, preds_opt,   'node_opt')
+
+    return {
+        'node_auc':        node_auc,
+        'node_ap':         node_ap,
+        'node_f1':         float(f1_score(all_labels_pooled, preds_fixed, zero_division=0)),
+        'node_f1_opt':     float(f1_opt),
+        'node_thresh_opt': float(opt_t),
+        'node_bal_acc':    float(balanced_accuracy_score(all_labels_pooled, preds_opt)),
+        **cm_fixed,
+        **cm_opt,
+    }
 
 
 def full_evaluation(encoder, edge_pred, node_pred, dataset, device):

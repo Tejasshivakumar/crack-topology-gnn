@@ -8,7 +8,11 @@ Two tasks are trained jointly:
 Combined loss = node_loss + edge_loss_weight * edge_loss
 
 Best checkpoint selected by combined val score:
-    val_score = 0.5 * node_val_auc + 0.5 * edge_val_auc
+    val_score = 0.5 * node_val_ap + 0.5 * edge_val_ap
+
+AP (Average Precision) is used for checkpoint selection because it is the
+primary reported metric and is more sensitive to the precision/recall
+trade-off under class imbalance than AUC-ROC.
 """
 
 import copy
@@ -17,7 +21,7 @@ import sys
 import torch
 import torch.nn.functional as F
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score
 from tqdm import tqdm
 
 from .model import build_encoder, MLPEdgePredictor, MLPNodePredictor
@@ -60,8 +64,8 @@ def _warmup_cosine(epoch: int, warmup_epochs: int, total_epochs: int, eta_min_ra
     return eta_min_ratio + (1.0 - eta_min_ratio) * cosine
 
 
-def _edge_auc(encoder, edge_pred, splits, device):
-    """Val AUC using hard-negative supervision pairs (consistent with final eval)."""
+def _edge_ap(encoder, edge_pred, splits, device):
+    """Val AP using hard-negative supervision pairs (consistent with final eval)."""
     encoder.eval(); edge_pred.eval()
     preds_all, labels_all = [], []
     with torch.no_grad():
@@ -78,11 +82,11 @@ def _edge_auc(encoder, edge_pred, splits, device):
                 preds_all.extend(prob)
                 labels_all.extend(lbl)
     if not labels_all or len(np.unique(labels_all)) < 2:
-        return 0.5
-    return roc_auc_score(labels_all, preds_all)
+        return 0.0
+    return average_precision_score(labels_all, preds_all)
 
 
-def _node_auc(encoder, node_pred, graphs, device, mask_frac=0.20, seed=99):
+def _node_ap(encoder, node_pred, graphs, device, mask_frac=0.20, seed=99):
     encoder.eval(); node_pred.eval()
     all_probs, all_labels = [], []
     with torch.no_grad():
@@ -103,8 +107,8 @@ def _node_auc(encoder, node_pred, graphs, device, mask_frac=0.20, seed=99):
             all_probs.extend(probs)
             all_labels.extend(labels_ev.numpy())
     if not all_labels or len(np.unique(all_labels)) < 2:
-        return 0.5
-    return roc_auc_score(all_labels, all_probs)
+        return 0.0
+    return average_precision_score(all_labels, all_probs)
 
 
 def train(
@@ -262,11 +266,11 @@ def train(
 
         scheduler.step()
 
-        # ── Validation: combined node + edge AUC ─────────────────────────────
-        node_val_auc = _node_auc(encoder, node_pred, node_graphs, device,
-                                 mask_frac=node_mask_frac, seed=99)
-        edge_val_auc = _edge_auc(encoder, edge_pred, edge_splits, device)
-        val_score    = 0.5 * node_val_auc + 0.5 * edge_val_auc
+        # ── Validation: combined node + edge AP (primary metric) ─────────────
+        node_val_ap = _node_ap(encoder, node_pred, node_graphs, device,
+                               mask_frac=node_mask_frac, seed=99)
+        edge_val_ap = _edge_ap(encoder, edge_pred, edge_splits, device)
+        val_score   = 0.5 * node_val_ap + 0.5 * edge_val_ap
 
         avg_el = total_edge_loss / max(n_edge, 1)
         avg_nl = total_node_loss / max(n_node, 1)
@@ -274,8 +278,8 @@ def train(
             'epoch': epoch,
             'edge_loss': avg_el,
             'node_loss': avg_nl,
-            'node_val_auc': node_val_auc,
-            'edge_val_auc': edge_val_auc,
+            'node_val_ap': node_val_ap,
+            'edge_val_ap': edge_val_ap,
             'val_score': val_score,
         })
 
@@ -293,18 +297,18 @@ def train(
             patience_counter += 1
 
         pbar.set_postfix({
-            'n_loss':  f'{avg_nl:.4f}',
-            'e_loss':  f'{avg_el:.4f}',
-            'n_auc':   f'{node_val_auc:.4f}',
-            'e_auc':   f'{edge_val_auc:.4f}',
-            'best':    f'{best_val_score:.4f}',
+            'n_loss': f'{avg_nl:.4f}',
+            'e_loss': f'{avg_el:.4f}',
+            'n_ap':   f'{node_val_ap:.4f}',
+            'e_ap':   f'{edge_val_ap:.4f}',
+            'best':   f'{best_val_score:.4f}',
         })
 
         if epoch % log_every == 0:
             marker = ' ← best' if is_best else ''
             tqdm.write(
                 f'  Epoch {epoch:03d} | n_loss={avg_nl:.4f}  e_loss={avg_el:.4f}'
-                f'  n_auc={node_val_auc:.4f}  e_auc={edge_val_auc:.4f}'
+                f'  n_ap={node_val_ap:.4f}  e_ap={edge_val_ap:.4f}'
                 f'  score={val_score:.4f}  best={best_val_score:.4f}{marker}'
             )
 

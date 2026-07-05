@@ -104,8 +104,9 @@ def _fmt(v, is_best=False):
 
 def print_comparison_table(results: dict, model_order: list):
     """Print a formatted side-by-side comparison table to stdout."""
-    node_keys = ['node_auc', 'node_ap', 'node_f1', 'node_f1_opt', 'node_bal_acc']
-    edge_keys = ['edge_auc', 'edge_ap']
+    node_keys = ['node_auc', 'node_ap', 'node_f1_opt', 'node_opt_precision',
+                 'node_opt_recall', 'node_bal_acc']
+    edge_keys = ['edge_auc', 'edge_ap', 'edge_precision', 'edge_recall']
 
     # Find best per metric
     best = {}
@@ -113,43 +114,90 @@ def print_comparison_table(results: dict, model_order: list):
         vals = {m: results[m]['metrics'].get(key, 0.0) for m in model_order if m in results}
         best[key] = max(vals, key=vals.get) if vals else None
 
-    W = 84
+    # ── Node task table ───────────────────────────────────────────────────────
+    W = 100
     print('\n' + '═' * W)
     print('  MODEL COMPARISON — crack topology link prediction')
+    print('  NODE TASK: missing crack tip detection (primary)')
     print('═' * W)
     print(f"  {'Model':<7}  {'Params':>7}  │"
-          f"  {'Node AUC':>8}  {'Node AP':>8}  {'F1':>6}  {'F1-opt':>7}  {'BalAcc':>7}  │"
-          f"  {'Edge AUC':>8}  {'Edge AP':>8}")
+          f"  {'AUC':>7}  {'AP':>7}  │"
+          f"  ── threshold=0.5 ──────────────────────────────── │"
+          f"  ── optimal threshold ──────────────────────────")
+    print(f"  {'':7}  {'':7}  │"
+          f"  {'':7}  {'':7}  │"
+          f"  {'TP':>6}  {'FP':>6}  {'TN':>6}  {'FN':>6}  {'Prec':>6}  {'Rec':>6}  {'F1':>6}  │"
+          f"  {'Thr':>5}  {'Prec':>6}  {'Rec':>6}  {'F1opt':>6}  {'BalAcc':>7}")
     print('  ' + '─' * (W - 2))
 
-    labels = {
-        'mlp_pos': 'mlp-pos',
-        'mlp':     'mlp',
-        'gcn':     'gcn',
-        'sage':    'sage',
-        'gine':    'gine',
-        'gat':     'gat',
-    }
+    labels = {'mlp_pos': 'mlp-pos', 'mlp': 'mlp', 'gcn': 'gcn',
+               'sage': 'sage', 'gine': 'gine', 'gat': 'gat'}
+
     for m in model_order:
         if m not in results:
             continue
-        r = results[m]
+        r    = results[m]
         mets = r['metrics']
-        params_k = r['params'] // 1000
-        label = labels.get(m, m)
+        pk   = r['params'] // 1000
+        lbl  = labels.get(m, m)
 
-        def v(key):
+        def v(key, fmt='.4f'):
             val = mets.get(key, 0.0)
-            marker = '◄' if best.get(key) == m else ' '
-            return f'{val:.4f}{marker}'
+            s   = format(val, fmt)
+            return s + ('◄' if best.get(key) == m else ' ')
 
-        print(f"  {label:<7}  {params_k:>6}k  │"
-              f"  {v('node_auc'):>9}  {v('node_ap'):>9}  {v('node_f1'):>7}  "
-              f"{v('node_f1_opt'):>8}  {v('node_bal_acc'):>8}  │"
-              f"  {v('edge_auc'):>9}  {v('edge_ap'):>9}")
+        def vi(key):
+            return str(mets.get(key, 0))
+
+        print(f"  {lbl:<7}  {pk:>6}k  │"
+              f"  {v('node_auc'):>8}  {v('node_ap'):>8}  │"
+              f"  {vi('node_tp'):>6}  {vi('node_fp'):>6}  {vi('node_tn'):>6}  {vi('node_fn'):>6}"
+              f"  {v('node_precision'):>7}  {v('node_recall'):>7}  {v('node_f1'):>7}  │"
+              f"  {mets.get('node_thresh_opt',0.5):>5.3f}"
+              f"  {v('node_opt_precision'):>7}  {v('node_opt_recall'):>7}"
+              f"  {v('node_f1_opt'):>7}  {v('node_bal_acc'):>8}")
 
     print('═' * W)
-    print('  ◄ = best in column\n')
+
+    # ── Edge task table ───────────────────────────────────────────────────────
+    print('\n  EDGE TASK: missing crack segment recovery (secondary)')
+    print('═' * W)
+    print(f"  {'Model':<7}  {'Params':>7}  │"
+          f"  {'AUC':>7}  {'AP':>7}  │"
+          f"  ── threshold=0.5 ──────────────────────────────── │"
+          f"  ── optimal threshold ──────────────────")
+    print(f"  {'':7}  {'':7}  │"
+          f"  {'':7}  {'':7}  │"
+          f"  {'TP':>6}  {'FP':>6}  {'TN':>6}  {'FN':>6}  {'Prec':>6}  {'Rec':>6}  {'F1':>6}  │"
+          f"  {'Thr':>5}  {'Prec':>6}  {'Rec':>6}  {'F1opt':>6}")
+    print('  ' + '─' * (W - 2))
+
+    for m in model_order:
+        if m not in results:
+            continue
+        r    = results[m]
+        mets = r['metrics']
+        pk   = r['params'] // 1000
+        lbl  = labels.get(m, m)
+
+        def v(key, fmt='.4f'):
+            val = mets.get(key, 0.0)
+            s   = format(val, fmt)
+            return s + ('◄' if best.get(key) == m else ' ')
+
+        def vi(key):
+            return str(mets.get(key, 0))
+
+        print(f"  {lbl:<7}  {pk:>6}k  │"
+              f"  {v('edge_auc'):>8}  {v('edge_ap'):>8}  │"
+              f"  {vi('edge_tp'):>6}  {vi('edge_fp'):>6}  {vi('edge_tn'):>6}  {vi('edge_fn'):>6}"
+              f"  {v('edge_precision'):>7}  {v('edge_recall'):>7}  {v('edge_f1_check'):>7}  │"
+              f"  {mets.get('edge_thresh_opt',0.5):>5.3f}"
+              f"  {v('edge_opt_precision'):>7}  {v('edge_opt_recall'):>7}"
+              f"  {v('edge_opt_f1_check'):>7}")
+
+    print('═' * W)
+    print('  ◄ = best in column  |  AP = primary metric  |  confusion counts are pooled across all test graphs\n')
 
 
 # ── Training curve plot ───────────────────────────────────────────────────────
@@ -163,17 +211,17 @@ def plot_comparison_curves(all_history: dict, save_path: str):
     colours = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
     for idx, (name, history) in enumerate(all_history.items()):
-        epochs    = [h['epoch']        for h in history]
-        node_auc  = [h['node_val_auc'] for h in history]
-        edge_auc  = [h['edge_val_auc'] for h in history]
+        epochs   = [h['epoch'] for h in history]
+        node_ap  = [h.get('node_val_ap', h.get('node_val_auc', 0.0)) for h in history]
+        edge_ap  = [h.get('edge_val_ap', h.get('edge_val_auc', 0.0)) for h in history]
         c = colours[idx % len(colours)]
-        axes[0].plot(epochs, node_auc, label=name, color=c)
-        axes[1].plot(epochs, edge_auc, label=name, color=c)
+        axes[0].plot(epochs, node_ap, label=name, color=c)
+        axes[1].plot(epochs, edge_ap, label=name, color=c)
 
-    for ax, title in zip(axes, ['Node Val AUC (missing crack tips)',
-                                  'Edge Val AUC (missing segments)']):
+    for ax, title in zip(axes, ['Node Val AP (missing crack tips)',
+                                  'Edge Val AP (missing segments)']):
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('AUC-ROC')
+        ax.set_ylabel('Avg Precision')
         ax.set_title(title)
         ax.legend(fontsize=8)
         ax.set_ylim(0.4, 1.0)
