@@ -252,7 +252,7 @@ def main():
         stem  = os.path.splitext(fname)[0]
         path  = os.path.join(vis_dir, stem + '.png')
         try:
-            visualize_predictions(g, encoder, edge_pred, node_pred, device,
+            visualize_predictions(g, encoder, edge_pred, node_pred, torch.device('cpu'),
                                   save_path=path, mask_dir=args.mask_dir,
                                   node_threshold=metrics.get('node_thresh_opt', 0.5))
         except Exception as e:

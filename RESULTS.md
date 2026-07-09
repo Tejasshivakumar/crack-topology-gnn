@@ -8,6 +8,36 @@ Answer: **Yes — demonstrated by the node-level hidden-neighbour task**, where 
 
 ---
 
+## Heuristic Baselines — Node Task (Non-Learning Floor)
+
+**Date:** 2026-07-09  
+**Script:** `link_prediction/node_heuristics.py`  
+**Full results:** `outputs/node_heuristic_results.json`  
+**Context:** Canonical 200-epoch results — see `three_seeds.md`
+
+Non-learning rules applied to the masked test graphs (636 graphs, 8,335 scored nodes). These establish the floor the GNN must beat.
+
+| Baseline | Node AP | Interpretation |
+|---|---|---|
+| Thickness inverse | 0.056 | Weakest — crack thickness uncorrelated with tip status |
+| **Endpoint feature** | **0.077** | **Below random** — structural recompute makes all endpoints indistinguishable |
+| Peripheral distance | 0.087 | Near random — position gives marginal signal |
+| Class prior | 0.085 | Expected AP of a random ranker = positive rate (8.5%) |
+| Degree inverse | 0.090 | Near random — low degree nodes slightly more suspicious |
+| Random (uniform) | 0.091 | Noise ceiling for non-learning approaches |
+
+**All heuristics score ≤ 0.091.** This is the performance ceiling for any hand-written rule. GNN results for comparison:
+
+| Model | Node AP | Gap over best heuristic |
+|---|---|---|
+| Best heuristic | 0.091 | — |
+| MLP (learned, no graph) | 0.662 | **+0.571** |
+| GINE (200ep, seed=42) | 0.739 | **+0.648** |
+
+**Key note — endpoint_feat below random:** After masking and structural recompute, the `is_endpoint` feature is 1 for both real endpoints AND base nodes that just lost a hidden tip. They are indistinguishable by features alone. This confirms the masking protocol successfully eliminates feature-based shortcuts — the model *must* reason about topology to succeed.
+
+---
+
 ## Stage 3: GNN Link Prediction
 
 **Date:** 2026-06-21  
