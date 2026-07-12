@@ -403,21 +403,21 @@ We apply EGAT-style edge-featured attention to crack topology link prediction wi
 
 ---
 
-### 22. Hu et al. — "Open Graph Benchmark: Datasets for Machine Learning on Graphs" (OGB / GINE)
-**Venue:** NeurIPS 2020  
-**arXiv:** 2005.00687
+### 22. Xiao et al. — "Graph Isomorphism Network for Materials Property Prediction Along with Explainability Analysis" (EGIN)
+**Venue:** Computational Materials Science, Vol. 233, Article 112619, Elsevier (ScienceDirect), 2024  
+**DOI:** 10.1016/j.commatsci.2023.112619
 
 **Summary:**  
-Introduces the Open Graph Benchmark suite and, crucially for our work, the GINE (Graph Isomorphism Network with Edge features) architecture. GINE extends GIN to incorporate edge features via additive injection before aggregation: h_v^(ℓ) = MLP((1+ε)·h_v^(ℓ-1) + Σ_{u∈N(v)} ReLU(h_u^(ℓ-1) + e_{uv})). OGB established the evaluation protocol that inspired our per-graph AP averaging.
+Proposes EGIN — a Graph Isomorphism Network extended with edge feature injection for materials property prediction. EGIN incorporates edge features (bond type, bond length, bond angle) into the aggregation step before the MLP: h_v^(ℓ) = MLP((1+ε)·h_v^(ℓ-1) + Σ_{u∈N(v)} ReLU(h_u^(ℓ-1) + e_{uv})). Includes gradient-based explainability analysis that identifies which edge features most influence property predictions.
 
 **Why it fits:**  
-GINEConv is our primary encoder. The edge feature injection formula above is implemented verbatim in stage3_report.md Section 5.4. The per-graph AP averaging (our correction of the global-pooling bug) was directly motivated by OGB's per-graph evaluation protocol.
+EGIN implements the same edge feature injection formula used by our GINEConv encoder (Stage 3, Section 5.4). Both architectures represent physical structure as attributed graphs with continuous edge features — Xiao et al. use atomic bond properties; we use crack segment geometry (thickness, tortuosity, angle, length). The explainability analysis also parallels our M5 edge ablation study.
 
 **The gap:**  
-OGB benchmarks use molecular graphs, citation graphs, and protein interaction networks — all with discrete node labels and different structural properties from crack topology graphs. No infrastructure domain.
+EGIN targets molecular graph-level regression (crystal property prediction) using discrete categorical edge features from fixed chemical bond types. It does not study link prediction in infrastructure inspection graphs, nor continuous geometric edge features measured from image skeletons.
 
 **How our work fills it:**  
-We apply GINE to the first crack topology link prediction benchmark and show it achieves the best node AP (0.739 ± 0.004) — validating the GINE architecture in a novel physical domain while establishing the first performance reference for this task.
+We apply GINE-style edge injection to crack topology link prediction — the first application to image-derived infrastructure graphs with 8-dimensional continuous geometric edge features. GINE achieves the best node AP (0.739 ± 0.004), and our ablation shows that thickness is the dominant edge feature (removing it alone costs −0.347 AP, nearly matching full edge feature removal at −0.350).
 
 ---
 
@@ -501,7 +501,7 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 | 19 | Kipf & Welling (GCN) | ICLR | 2017 | Stage 3 GCN encoder | First GCN < MLP result on crack topology graphs |
 | 20 | Ciano et al. (inductive vs transductive GNN) | IEEE TPAMI | 2021 | Stage 3 eval protocol | Transductive per-graph evaluation for crack topology |
 | 21 | Wang et al. (EGAT) | Springer ICANN | 2021 | Stage 3 GAT encoder | Edge-feature-aware attention for crack topology |
-| 22 | Hu et al. OGB (GINE) | NeurIPS | 2020 | Stage 3 GINE encoder | First GINE application to crack topology |
+| 22 | Xiao et al. (EGIN) | ScienceDirect CMS | 2024 | Stage 3 GINE encoder | First GINE-style edge injection on crack topology |
 | 23 | Zhang et al. (CRACK500 dataset) | IEEE ICIP | 2016 | Dataset source | One of 11 crack segmentation sources |
 | 24 | Shit et al. (clDice / SoftClDice) | CVPR | 2021 | Stage 1 training loss | First SoftClDice use for crack segmentation |
 | 25 | Al-Huda et al. (EfficientCrackNet) | IEEE Access | 2024 | Stage 1 SOTA comparison | Topology-aware recall vs. IoU-optimal baselines |
