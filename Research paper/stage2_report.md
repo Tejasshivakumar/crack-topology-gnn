@@ -583,12 +583,12 @@ The DeepCrack dataset has 100% conversion rate because its images all contain cl
 
 **Stage 3 usability:**
 
-| Task | Train graphs usable | Fraction |
-|---|---|---|
-| Node task | 3,712 | 99.6% |
-| Edge task | 1,889 | 50.7% |
+| Task | Train usable | Train % | Test usable | Test % |
+|---|---|---|---|---|
+| Node task (≥1 endpoint) | 3,727 | 99.97% | 636 | 100% |
+| Edge task (≥2 edges) | 3,723 | 99.87% | 636 | 100% |
 
-The node task usability is near-100%: almost every graph has at least one endpoint node (crack tip) that can be masked. The edge task usability is ~50%: the edge task requires at least 2 edges so that one can be hidden while the other remains for message passing — graphs with only 1 edge cannot participate.
+Both tasks are usable for essentially the full dataset. The node task requires at least one endpoint node to mask; only 1 train graph fails this (a closed loop with no tips). The edge task requires at least 2 undirected edges so that one can be hidden while another remains for message passing; only 5 train graphs fall below this threshold. Every test graph passes both filters.
 
 **Crack density:**
 
@@ -784,10 +784,10 @@ The recomputation in step 3 is critical for correctness. If Stage 3 used the sav
 | Metric | Train | Test |
 |---|---|---|
 | Total graphs | 3,728 | 636 |
-| Usable for node task (≥1 endpoint) | 3,712 | — |
-| Usable for edge task (≥2 edges) | 1,889 | — |
+| Usable for node task (≥1 endpoint) | 3,727 (99.97%) | 636 (100%) |
+| Usable for edge task (≥2 edges) | 3,723 (99.87%) | 636 (100%) |
 
-The 16 node-task unusable graphs (3,728 − 3,712) have zero endpoint nodes after pruning — they consist entirely of junction and chain nodes (closed crack loops). These are excluded from the node prediction loss but still contribute to the edge prediction loss.
+Only 1 train graph has no endpoint nodes (a closed crack loop with no tips) and 5 train graphs have fewer than 2 undirected edges; both are excluded from their respective task losses. The test split is fully usable for both tasks — the Stage 2 degenerate filter (min_nodes=3) ensures every surviving test graph meets both thresholds.
 
 ### 11.3 Impact of Stage 2 Quality on Stage 3
 

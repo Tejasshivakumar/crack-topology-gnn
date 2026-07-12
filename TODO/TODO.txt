@@ -251,3 +251,30 @@
   ├────────────────────────────────┼─────────────────────────────────────┼───────────────────────────────────────────┤
   │ CFD test gap                   │ Investigate the split               │ No, just note it                          │
   └────────────────────────────────┴─────────────────────────────────────┴───────────────────────────────────────────┘
+
+  ┌──────────┬───────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────┬────────┐
+  │ Priority │             Item              │                                       What's needed                                        │ Effort  │
+  ├──────────┼───────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼─────────┤
+  │ 🔴 Must   │ C3 — End-to-end pipeline test     │ Run 10–20 images through all 3 stages using predicted masks (not GT), measure node AP drop │ Hours   │
+  ├───────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼─────────┤
+  │ 🔴 Must   │ C4 — Qualitative figures          │ Crack image + graph overlay, frontier prediction figure, one failure case                  │ Hours   │
+  ├───────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼─────────┤
+  │ 🔴 Must   │ M1 — GAT/GCN multi-seed           │ 6 runs (3 seeds × 2 models) overnight                                                      │ Compute │
+  ├───────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼─────────┤
+  │ 🟡 Should │ M2 — Masking fraction ablation    │ Data exists in sage/ablation_results.json — just needs to be written up                    │ 30 min  │
+  ├───────────┼───────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────┼─────────┤
+  │ 🟡 Should │ M4 — SOTA segmentation comparison │ Add DeepCrack published numbers to seg table                                               │ 15 min  │
+  └───────────┴───────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────┴─────────┘
+
+  Ready now (data exists, just need figures):
+  - Segmentation training curves (checkpoint progression is logged)
+  - Edge ablation bar chart
+  - Multi-seed comparison plot
+
+  ---
+  Suggested order:
+  1. M4 — 15 minutes, just adding numbers to a table
+  2. M2 — 30 minutes, data already exists
+  3. M1 — Launch overnight, don't wait for it
+  4. C3 — End-to-end test (most work)
+  5. C4 — Figures (can do in parallel while C3 runs)
