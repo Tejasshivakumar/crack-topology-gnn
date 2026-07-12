@@ -26,7 +26,7 @@ Our crack topology graphs have 6-dimensional continuous node features (position,
 
 ---
 
-### 2. Wu et al. — "A Comprehensive Study of Graph Neural Networks"
+### 2. Wu et al. — "A Comprehensive Survey on Graph Neural Networks"
 **Venue:** IEEE Transactions on Neural Networks and Learning Systems, 2021, Vol. 32, No. 1, pp. 4–24  
 **DOI:** 10.1109/TNNLS.2020.2978386
 
@@ -157,9 +157,9 @@ We use DeepCrack-quality segmentation as the input to Stage 2 (mask → skeleton
 
 ---
 
-### 9. Bi et al. — "Road Crack Detection Using Deep Neural Network Based on Attention Mechanism and Residual Structure" (AR-UNet)
-**Venue:** IEEE Access 2023  
-**DOI / URL:** https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=10003197
+### 9. Jing et al. — "Road Crack Detection Using Deep Neural Network Based on Attention Mechanism and Residual Structure" (AR-UNet)
+**Venue:** IEEE Access, Vol. 11, pp. 919–929, 2023  
+**DOI:** 10.1109/ACCESS.2022.3233072
 
 **Summary:**  
 Proposes AR-UNet: a U-Net variant with residual blocks and CBAM (Convolutional Block Attention Module) for road crack segmentation. Demonstrates improved thin crack recall and background noise suppression. Evaluated on DeepCrack, Crack Forest Dataset (CFD), and Road Image Dataset (RID).
@@ -175,8 +175,8 @@ Our HybridGraphUNet replaces the CNN bottleneck with a GNN bottleneck (operating
 
 ---
 
-### 10. Jiang et al. — "Hybrid graph convolutional and deep convolutional networks for enhanced pavement crack detection"
-**Venue:** Engineering Applications of Artificial Intelligence, ScienceDirect 2025  
+### 10. Song & Tian — "Hybrid graph convolutional and deep convolutional networks for enhanced pavement crack detection"
+**Venue:** Engineering Applications of Artificial Intelligence, Vol. 145, Article 110227, ScienceDirect 2025  
 **DOI:** 10.1016/j.engappai.2025.110227
 
 **Summary:**  
@@ -195,9 +195,9 @@ We take the next step in abstraction: after segmentation, we extract the skeleto
 
 ## Part 4 — Skeletonization and Topological Graph Construction
 
-### 11. Zhao et al. — "Automatic identification of rock fractures based on deep learning"
-**Venue:** Engineering Geology, ScienceDirect 2024  
-**DOI:** 10.1016/j.enggeo.2024.107630
+### 11. Ji et al. — "Automatic identification of rock fractures based on deep learning"
+**Venue:** Engineering Geology, Vol. 345, Article 107874, ScienceDirect 2025  
+**DOI:** 10.1016/j.enggeo.2024.107874
 
 **Summary:**  
 Segments fracture images → extracts single-pixel skeleton using Zhang-Suen thinning → identifies I, Y, X junction nodes (degree 1/3/4) → builds a polyline graph with geometric measurements (fracture length, aperture, connectivity count). Structurally identical to our Stage 2 pipeline.
@@ -488,9 +488,9 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 | 6 | Hu et al. (transfer learning cracks) | Mechanics of Materials | 2023 | Stage 3 generalization | 11-source real-image generalization |
 | 7 | Shukla et al. (MPNN physics engine) | IJSS | 2024 | Stage 3 message passing | Message passing on image-derived graphs |
 | 8 | Liu et al. (DeepCrack) | Neurocomputing | 2019 | Stage 1 baseline | Topology-aware segmentation (GNN bottleneck) |
-| 9 | Bi et al. (AR-UNet) | IEEE Access | 2023 | Stage 1 architecture | HybridGraphUNet GNN bottleneck vs CNN attention |
-| 10 | Jiang et al. (Hybrid GCN+DCN) | Eng. App. AI | 2025 | Image-to-graph motivation | Skeleton-based topology graph vs superpixel graph |
-| 11 | Zhao et al. (rock fracture skeleton) | Engineering Geology | 2024 | Stage 2 graph construction | Training a GNN on skeleton-derived graphs |
+| 9 | Jing et al. (AR-UNet) | IEEE Access | 2023 | Stage 1 architecture | HybridGraphUNet GNN bottleneck vs CNN attention |
+| 10 | Song & Tian (Hybrid GCN+DCN) | Eng. App. AI | 2025 | Image-to-graph motivation | Skeleton-based topology graph vs superpixel graph |
+| 11 | Ji et al. (rock fracture skeleton) | Engineering Geology | 2025 | Stage 2 graph construction | Training a GNN on skeleton-derived graphs |
 | 12 | Wang et al. (fracture extraction) | IJRMMS | 2025 | Stage 2 skeletonization | Feature-enriched graph + learned link prediction |
 | 13 | Li et al. (skeletonization measurement) | Mat. Today Comm. | 2025 | Stage 1→2 transition | Graph construction → GNN training pipeline |
 | 14 | TopoM-CrackNet (topology-informed segmentation) | Automation in Construction | 2025 | Stage 1→2 topology | GNN link prediction on topology-consistent crack graphs |
