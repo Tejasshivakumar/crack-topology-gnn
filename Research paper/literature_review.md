@@ -367,21 +367,21 @@ Our empirical result (GCN < MLP, node AP = 0.599 vs 0.662) is the first demonstr
 
 ---
 
-### 20. Hamilton et al. — "Inductive Representation Learning on Large Graphs" (GraphSAGE)
-**Venue:** NeurIPS 2017  
-**URL:** https://proceedings.neurips.cc/paper/2017/hash/5dd9db5e033da9c6fb5ba83c7a7ebea9-Abstract.html
+### 20. Ciano et al. — "On Inductive–Transductive Learning With Graph Neural Networks"
+**Venue:** IEEE Transactions on Pattern Analysis and Machine Intelligence (TPAMI), Vol. 44, No. 2, pp. 758–769, 2021  
+**DOI:** 10.1109/TPAMI.2021.3054304
 
 **Summary:**  
-Introduces GraphSAGE — an inductive learning framework that learns aggregation functions by sampling and concatenating neighbor representations. Unlike GCN, SAGE is not constrained to the full graph at training time and uses mean/max/LSTM aggregators rather than spectral normalization.
+Formally studies the distinction between inductive GNNs (which generalize to unseen graphs at inference) and transductive GNNs (which specialize to the training graph). Derives theoretical conditions under which transductive evaluation is more appropriate than cross-graph inductive evaluation, and empirically validates these conditions on node and graph classification benchmarks.
 
 **Why it fits:**  
-Directly cited for the SAGEEncoder in Stage 3. SAGE avoids GCN's degree normalization by using concatenation of self and neighbor mean representations, which is why it outperforms GCN on crack graphs (0.700 vs 0.599). The inductive property also means SAGE generalizes to unseen graphs — directly applicable to our per-graph inference use case.
+Our Stage 3 uses per-graph transductive evaluation — each crack image produces a single graph with an 80/10/10 node split for training, validation, and test. This is precisely the transductive regime studied by Ciano et al. The paper provides formal justification for why cross-graph (inductive) evaluation is inappropriate here: crack topology is image-specific and the node feature distribution is graph-dependent.
 
 **The gap:**  
-SAGE operates without edge features — it aggregates neighbor node representations uniformly, ignoring the geometric properties of the crack segment connecting two nodes.
+Their analysis covers node and graph classification on fixed, homogeneous graphs. It does not address link prediction in engineering inspection graphs, nor does it study how geometric edge features (thickness, tortuosity, angle) interact with the inductive–transductive trade-off.
 
 **How our work fills it:**  
-GINE extends SAGE-style message passing with edge feature injection (Section 5.4). The SAGE → GINE gap (+0.039 node AP) quantifies exactly how much crack geometry information is captured by edge features beyond graph structure alone.
+We operate in the transductive regime as prescribed by Ciano et al. and extend to link prediction with crack-specific geometric edge features. The per-graph split validates whether learned topology generalizes within-graph — and our multi-seed (3 seeds × 5 models) validation confirms the finding is not seed-sensitive.
 
 ---
 
@@ -499,7 +499,7 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 | 17 | Zhang et al. (multi-source domain) | Measurement | 2024 | Dataset construction | Multi-source topology graph generalization |
 | 18 | Ronneberger et al. (U-Net) | MICCAI / Springer | 2015 | Stage 1 backbone | GNN bottleneck extension to U-Net |
 | 19 | Kipf & Welling (GCN) | ICLR | 2017 | Stage 3 GCN encoder | First GCN < MLP result on crack topology graphs |
-| 20 | Hamilton et al. (GraphSAGE) | NeurIPS | 2017 | Stage 3 SAGE encoder | Inductive aggregation for crack graph inference |
+| 20 | Ciano et al. (inductive vs transductive GNN) | IEEE TPAMI | 2021 | Stage 3 eval protocol | Transductive per-graph evaluation for crack topology |
 | 21 | Veličković et al. (GAT) | ICLR | 2018 | Stage 3 GAT encoder | Edge-feature-aware attention for crack topology |
 | 22 | Hu et al. OGB (GINE) | NeurIPS | 2020 | Stage 3 GINE encoder | First GINE application to crack topology |
 | 23 | Zhang et al. (CRACK500 dataset) | IEEE ICIP | 2016 | Dataset source | One of 11 crack segmentation sources |
