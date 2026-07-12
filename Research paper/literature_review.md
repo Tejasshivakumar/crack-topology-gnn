@@ -385,21 +385,21 @@ We operate in the transductive regime as prescribed by Ciano et al. and extend t
 
 ---
 
-### 21. Veličković et al. — "Graph Attention Networks" (GAT)
-**Venue:** ICLR 2018  
-**arXiv:** 1710.10903
+### 21. Wang et al. — "EGAT: Edge-Featured Graph Attention Network"
+**Venue:** International Conference on Artificial Neural Networks (ICANN 2021), Lecture Notes in Computer Science, Springer International Publishing  
+**DOI:** 10.1007/978-3-030-86362-3_21
 
 **Summary:**  
-Introduces attention-based aggregation in GNNs: each node attends to its neighbors with learned attention coefficients α_{uv}, allowing the model to differentially weight neighbor contributions without requiring graph structure as input to the coefficients (unlike GCN's fixed degree normalization).
+Extends GAT to graphs with edge features by incorporating edge feature vectors into both the attention coefficient computation and the message-passing aggregation. EGAT iterates node and edge representations jointly, allowing the model to differentially weight neighbor contributions using geometric context carried by the edges — not just the neighbor node embeddings.
 
 **Why it fits:**  
-Directly cited for the CrackGATEncoder in Stage 3. GAT achieves the best edge AP (0.947) by learning to attend to the most relevant neighbors for each edge prediction. The multi-head attention (4 heads in layers 1–2, 1 head in layer 3) is standard from the original paper.
+Directly cited for the CrackGATEncoder in Stage 3. Our implementation uses PyG's GATConv with the edge_dim argument, which follows EGAT's formulation: edge features are projected and injected into the key computation before the softmax attention, giving the model access to geometric context (thickness, tortuosity, angle) when deciding which neighbors to attend to. GAT achieves the best edge AP (0.947) in our evaluation.
 
 **The gap:**  
-Standard GAT ignores edge features in its attention computation. Our CrackGAT uses PyG's GATConv with edge_dim argument, which incorporates edge features into the key computation before softmax — an extension beyond the original paper.
+EGAT is evaluated on homogeneous graph benchmarks (node/graph classification) without domain-specific geometric edge features. It does not study link prediction in engineering inspection graphs, nor the relative importance of individual edge feature groups.
 
 **How our work fills it:**  
-We adapt GAT to the attributed graph case (where edges carry 8-dimensional geometric features) and evaluate it on the novel crack topology link prediction task. GAT's large parameter count (380k vs GINE's 113k) does not translate to the best node AP, supporting the conclusion that attention is not what matters for tip prediction — thickness information does.
+We apply EGAT-style edge-featured attention to crack topology link prediction with 8-dimensional geometric edge features. Our ablation (M5) reveals that thickness dominates: removing edge features entirely (−0.350 node AP) nearly matches removing thickness alone (−0.347), showing that the attention mechanism's edge-feature gain comes primarily from physical geometry, not just structural context.
 
 ---
 
@@ -500,7 +500,7 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 | 18 | Ronneberger et al. (U-Net) | MICCAI / Springer | 2015 | Stage 1 backbone | GNN bottleneck extension to U-Net |
 | 19 | Kipf & Welling (GCN) | ICLR | 2017 | Stage 3 GCN encoder | First GCN < MLP result on crack topology graphs |
 | 20 | Ciano et al. (inductive vs transductive GNN) | IEEE TPAMI | 2021 | Stage 3 eval protocol | Transductive per-graph evaluation for crack topology |
-| 21 | Veličković et al. (GAT) | ICLR | 2018 | Stage 3 GAT encoder | Edge-feature-aware attention for crack topology |
+| 21 | Wang et al. (EGAT) | Springer ICANN | 2021 | Stage 3 GAT encoder | Edge-feature-aware attention for crack topology |
 | 22 | Hu et al. OGB (GINE) | NeurIPS | 2020 | Stage 3 GINE encoder | First GINE application to crack topology |
 | 23 | Zhang et al. (CRACK500 dataset) | IEEE ICIP | 2016 | Dataset source | One of 11 crack segmentation sources |
 | 24 | Shit et al. (clDice / SoftClDice) | CVPR | 2021 | Stage 1 training loss | First SoftClDice use for crack segmentation |
