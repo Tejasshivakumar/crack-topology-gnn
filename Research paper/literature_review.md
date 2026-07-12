@@ -421,12 +421,12 @@ We apply GINE-style edge injection to crack topology link prediction — the fir
 
 ---
 
-### 23. Zhang et al. — "Road Crack Detection Using Deep Neural Network Based on Dense Feature Pyramid Networks" (CRACK500)
-**Venue:** IEEE ICIP 2016  
-**DOI:** 10.1109/ICIP.2016.7532898
+### 23. Zhang et al. — "Road Crack Detection Using Deep Convolutional Neural Network" (CRACK500)
+**Venue:** 2016 IEEE International Conference on Image Processing (ICIP), pp. 3708–3712  
+**DOI:** 10.1109/ICIP.2016.7533052
 
 **Summary:**  
-Introduces the CRACK500 dataset — 500 crack images collected from road surfaces with pixel-level segmentation annotations, widely used as the standard pavement crack benchmark. The dataset spans multiple crack types (longitudinal, transverse, alligator) at various scales.
+Introduces the CRACK500 dataset — 500 crack images collected from road surfaces with pixel-level segmentation annotations, widely used as the standard pavement crack benchmark. The paper proposes a deep CNN trained on the dataset and the dataset spans multiple crack types (longitudinal, transverse, alligator) at various scales. Authors: Lei Zhang, Fan Yang, Yimin Daniel Zhang, Ying Julie Zhu.
 
 **Why it fits:**  
 CRACK500 is one of the 11 sources in our crack_seg_clean compilation. It contributes ~500 of the 11,298 raw images (4.4% of raw, higher fraction after cleaning since CRACK500 images have dense crack coverage). Must be cited as a dataset source.
@@ -502,7 +502,7 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 | 20 | Ciano et al. (inductive vs transductive GNN) | IEEE TPAMI | 2021 | Stage 3 eval protocol | Transductive per-graph evaluation for crack topology |
 | 21 | Wang et al. (EGAT) | Springer ICANN | 2021 | Stage 3 GAT encoder | Edge-feature-aware attention for crack topology |
 | 22 | Xiao et al. (EGIN) | ScienceDirect CMS | 2024 | Stage 3 GINE encoder | First GINE-style edge injection on crack topology |
-| 23 | Zhang et al. (CRACK500 dataset) | IEEE ICIP | 2016 | Dataset source | One of 11 crack segmentation sources |
+| 23 | Zhang, Yang et al. (CRACK500) | IEEE ICIP | 2016 | Dataset source | One of 11 crack segmentation sources |
 | 24 | Shit et al. (clDice / SoftClDice) | CVPR | 2021 | Stage 1 training loss | First SoftClDice use for crack segmentation |
 | 25 | Al-Huda et al. (EfficientCrackNet) | IEEE Access | 2024 | Stage 1 SOTA comparison | Topology-aware recall vs. IoU-optimal baselines |
 
