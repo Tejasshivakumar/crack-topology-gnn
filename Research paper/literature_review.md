@@ -476,6 +476,64 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 
 ---
 
+## Part 7 — GNN Link Prediction and Crack Detection Algorithms
+
+These three papers are carried forward from the Phase 1 literature review. They justify specific Stage 3 design choices (negative sampling, evaluation protocol) and position the PU learning framing as the principled direction for future work once rich contextual crack datasets exist.
+
+### 26. Djenouri et al. — "Intelligent Graph Convolutional Neural Network for Road Crack Detection"
+**Venue:** IEEE Transactions on Intelligent Transportation Systems (TITS), Vol. 24, No. 8, pp. 8475–8482, 2023  
+**DOI:** 10.1109/TITS.2022.3215538
+
+**Summary:**  
+Constructs graphs from crack images using SIFT (Scale-Invariant Feature Transform) feature descriptors — regions with correlated visual features are connected as nodes regardless of physical location. Applies GCN on this feature-correlation graph for road crack detection, bypassing the need for pixel-level segmentation masks.
+
+**Why it fits:**  
+Represents a distinct alternative to our Stage 2 approach: feature-based graph construction vs. skeleton-based topology graph. Directly comparable to our work at the "image → graph" decision point. Their choice — connect nodes by visual feature similarity — creates a useful contrast that exposes why our skeleton-derived topology graph is necessary for link prediction: feature-similarity edges encode texture patterns, not physical crack continuity.
+
+**The gap:**  
+The feature-correlation graph cannot distinguish crack tips (degree-1 nodes, structurally significant) from non-tip crack pixels sharing similar SIFT descriptors. Two visually similar regions 50 pixels apart may be connected even if they belong to different, physically separate crack paths. No structural node classification, no topology-based link prediction.
+
+**How our work fills it:**  
+Our Stage 2 builds the graph on physical skeleton connectivity — edges represent actual crack path segments, nodes represent topologically meaningful locations (tips and junctions). This allows GINE message passing to propagate physically meaningful signals (thickness, tortuosity) along real crack paths, rather than across visually similar but structurally unrelated regions. The topology-based graph is the strict prerequisite for any meaningful crack link prediction.
+
+---
+
+### 27. Wang et al. — "Efficient Link Prediction Via GNN Layers Induced by Negative Sampling"
+**Venue:** IEEE Transactions on Knowledge and Data Engineering (TKDE), Vol. 37, No. 1, pp. 253–265, 2025  
+**DOI:** 10.1109/TKDE.2024.3481015
+
+**Summary:**  
+Formally proves that the distribution of negative samples during link prediction training directly induces the geometry of learned GNN representations. Structural negatives — non-edges between nodes that are topologically proximate (close in the graph) — produce substantially better link predictors than random negatives, because they force the model to discriminate true connectivity from plausible-but-absent connections.
+
+**Why it fits:**  
+Directly justifies Stage 3's hard negative sampling strategy. Our edge task samples non-edges using k-nearest neighbors (k_near=10) — geometrically proximate pairs that are plausible connections but confirmed absent in the skeleton. This is precisely the structural negative sampling that Wang et al. prove is theoretically optimal: it forces the model to learn the fine-grained topological distinction between connected and unconnected nearby nodes.
+
+**The gap:**  
+Their analysis covers homogeneous social and citation networks where "proximity" is defined by graph hops. Physical infrastructure graphs have an additional constraint: proximity is spatial (Euclidean distance between crack segments), not just topological. Hard negatives in crack graphs must respect both geometric proximity and physical plausibility.
+
+**How our work fills it:**  
+We instantiate their induced-negative-sampling principle in a physical domain with spatial constraints. Our frontier masking results confirm the prediction: the hardest evaluation (crack tips where plausible-but-absent connections are maximally confusable) shows the largest encoder gap (GINE−MLP = +0.210 vs +0.077 standard), consistent with Wang et al.'s theory that structural hard negatives amplify model-quality differences.
+
+---
+
+### 28. Mao et al. — "Boosting GNN-Based Link Prediction via PU-AUC Optimization"
+**Venue:** IEEE Transactions on Knowledge and Data Engineering (TKDE), Vol. 37, No. 4, pp. 1635–1649, 2025  
+**DOI:** 10.1109/TKDE.2025.3525490
+
+**Summary:**  
+Frames link prediction as a Positive-Unlabelled (PU) learning problem: existing edges are confirmed positive observations, but missing edges are not confirmed negatives — some will form in the future. Derives a PU-AUC objective that optimises the ranking of true positives above unlabelled (partially-positive) samples, outperforming standard binary negative sampling on sparse graphs where the PU assumption is structural.
+
+**Why it fits:**  
+Identifies the fundamental challenge our task shares but does not yet solve. In a real crack inspection scenario, a tip node that appears isolated in today's image may have genuinely propagated and connected — we simply lack the future observation. The missing edge is not a true negative; it is an unlabelled positive. Our current masking protocol treats hidden edges as recoverable positives in a closed graph — a controlled proxy for the open-world PU setting that Mao et al. formalise.
+
+**The gap:**  
+Their PU-AUC optimisation requires a class prior — an estimate of the fraction of truly positive pairs among unlabelled ones. In crack graphs, this prior is unknown: it depends on the crack propagation rate, material properties, load, and environmental conditions — exactly the contextual data that does not yet exist in public crack datasets.
+
+**How our work fills it:**  
+We establish the first GNN link prediction baseline on crack topology graphs, a prerequisite for applying PU optimisation. Once time-series crack inspection datasets with contextual metadata (location, material, load, climate) become available, Mao et al.'s PU-AUC objective can be applied directly on top of our architecture — replacing our binary masking protocol with the physically correct open-world formulation. Our GINE result (node AP 0.739 ± 0.004) is the binary-classification reference against which future PU-AUC improvements should be measured.
+
+---
+
 ## Summary Table
 
 | # | Paper | Venue | Year | Pipeline Stage Covered | Gap Filled by Our Work |
@@ -505,6 +563,9 @@ We show that recall (0.843 for HybridGraphUNet) is more important than IoU for S
 | 23 | Zhang, Yang et al. (CRACK500) | IEEE ICIP | 2016 | Dataset source | One of 11 crack segmentation sources |
 | 24 | Shit et al. (clDice / SoftClDice) | CVPR | 2021 | Stage 1 training loss | First SoftClDice use for crack segmentation |
 | 25 | Al-Huda et al. (EfficientCrackNet) | IEEE Access | 2024 | Stage 1 SOTA comparison | Topology-aware recall vs. IoU-optimal baselines |
+| 26 | Djenouri et al. (Intelligent GCN crack detection) | IEEE TITS | 2023 | Stage 2 contrast | Skeleton topology graph vs. SIFT feature-correlation graph |
+| 27 | Wang et al. (link prediction via neg. sampling) | IEEE TKDE | 2025 | Stage 3 neg. sampling | Hard structural negatives on physical crack graphs |
+| 28 | Mao et al. (PU-AUC link prediction) | IEEE TKDE | 2025 | Stage 3 future direction | Binary baseline for future PU-AUC optimisation |
 
 ---
 
@@ -515,9 +576,9 @@ Problem space our paper fills:
 
 Real crack images ─→ [Stage 1: Seg] ─→ [Stage 2: Skeleton+Graph] ─→ [Stage 3: GNN Link Pred]
         │                    │                       │                            │
-   8,9,14,17,18,24,25   Paper 10              Papers 11,12,13         Papers 1,2,3,4,19,20,21,22
-   (what exists)         (closest           (graph construction         (link prediction
-                          published)             validated)              theory + SEAL + GNN arch)
+   8,9,14,17,18,24,25   Papers 10,26           Papers 11,12,13      Papers 1,2,3,4,19,20,21,22,27
+   (what exists)         (closest alt.         (graph construction      (link prediction theory
+                         approaches)               validated)            + neg. sampling + GNN arch)
         │                    │                       │                            │
         └────────────────────┴───────────────────────┴────────────────────────────┘
                                 OUR WORK: first end-to-end pipeline connecting all stages
@@ -525,6 +586,7 @@ Real crack images ─→ [Stage 1: Seg] ─→ [Stage 2: Skeleton+Graph] ─→ 
 
 Dataset: Papers 6, 17, 23 motivate multi-source (11 sources, 4,769 images after cleaning)
 FEM/3D motivation (not image pipelines): Papers 5, 6, 7, 15, 16
+Future direction: Paper 28 (PU-AUC) — once contextual crack datasets (location, material, load, climate) exist
 ```
 
 No prior paper traverses all three stages in a single evaluated pipeline from real images to GNN link prediction with multi-seed validation.
