@@ -59,11 +59,12 @@ for i, (drop, ap) in enumerate(zip(drops, aps)):
 # Reference line at x=0 (= baseline AP drop)
 ax.axvline(0, color='#333333', linewidth=1.2, linestyle='-')
 
-# Baseline AP annotation
-ax.axvline(BASELINE_AP - BASELINE_AP, color='none')   # invisible anchor
-ax.text(0.003, len(rows) - 0.15,
-        f'Full GINE AP = {BASELINE_AP:.3f}',
-        fontsize=9, color='#333333', style='italic')
+# Baseline AP annotation — placed in the clear lower-middle-left region
+# (between the two shortest bars, left of the legend) so it never collides
+# with the two-line title.
+ax.text(0.30, 0.20, f'Full GINE AP = {BASELINE_AP:.3f}',
+        transform=ax.transAxes, fontsize=9.5, color='#444444',
+        style='italic', va='center', ha='left')
 
 # Axis formatting
 ax.set_yticks(y)
