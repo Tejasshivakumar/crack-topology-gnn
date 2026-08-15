@@ -45,3 +45,9 @@ logs/
 # Data (dataset lives outside the repo)
 data/
 datasets/
+
+# Local-only working material (not for the shared repo)
+TODO/
+Research paper/
+research paper building/
+meeting_prep/
