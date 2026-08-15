@@ -39,6 +39,9 @@ Thumbs.db
 *.log
 logs/
 
+# Text files
+*.txt
+
 # Data (dataset lives outside the repo)
 data/
 datasets/

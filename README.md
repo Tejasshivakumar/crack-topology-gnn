@@ -1,6 +1,8 @@
-# Crack Topology GNN — Phase 2
+# From Pixels to Topology: A Three-Stage Pipeline for Road Crack Graph Analysis Using Graph Neural Networks
 
-End-to-end pipeline for road crack evolution analysis — from raw images to graph-structured data to GNN link prediction.
+**Authors:** Tejas Shivakumar, Aishwarya Shekar — DCU Practicum 2025–2026
+
+End-to-end pipeline for road crack topology analysis — from raw images to graph-structured data to GNN-based topology understanding.
 
 ## Pipeline
 
@@ -355,12 +357,12 @@ pip install scikit-image scikit-learn sknw matplotlib scipy networkx
 
 ## Datasets
 
-| Dataset | Used in | Location |
-|---------|---------|----------|
-| DeepCrack | Stage 1 (training) + Stage 2 | `/Users/tejasskamar/Practicum/Data Set/DeepCrack/` |
-| CrackDataset_DL_HY | Stage 1 experiments | `/Users/tejasskamar/Practicum/Data Set/CrackDataset_DL_HY/` |
+| Dataset | Used in | Notes |
+|---------|---------|-------|
+| DeepCrack | Stage 1 (training) + Stage 2 | Primary benchmark dataset |
+| CrackDataset_DL_HY | Stage 1 experiments | Multi-source curated dataset |
 
-Dataset paths are outside the repository and are not committed.
+Dataset files are not committed to this repository. Place datasets in a local directory and update paths in the relevant scripts accordingly.
 
 ---
 
@@ -370,4 +372,4 @@ Graph layer code (`segmentation/graph_layers/`) adapted from the ViG (Vision GNN
 > Han et al., *"Vision GNN: An Image is Worth Graph of Nodes"*, NeurIPS 2022.
 
 Phase 1 baseline (segmentation experiments, ImageToGraph reference implementation):
-> Aryan's TokenCutSeg repository — `/Users/tejasskamar/Practicum/PHASE 1/Aryan_Repo/TokenCutSeg/`
+> Aryan's TokenCutSeg repository.

@@ -186,7 +186,7 @@ def draw_figure(result, binary_mask, skeleton, orig_img, save_path, title=''):
         Line2D([0],[0], marker='o', color='none', markerfacecolor='white',
                markersize=7, label='Chain / junction'),
     ]
-    ax.legend(handles=leg2, loc='lower right', facecolor='#2a2a2a',
+    ax.legend(handles=leg2, loc='best', facecolor='#2a2a2a',
               edgecolor='gray', labelcolor='white', fontsize=6.5)
     ax.set_title('Panel 2 — Segmentation + Graph\nmask → skeleton → nodes & edges',
                  color='white', fontsize=9)
@@ -237,7 +237,7 @@ def draw_figure(result, binary_mask, skeleton, orig_img, save_path, title=''):
         Line2D([0],[0], color='#555555', lw=1,
                label='Visible edge'),
     ]
-    ax.legend(handles=leg3, loc='lower right', facecolor='#2a2a2a',
+    ax.legend(handles=leg3, loc='best', facecolor='#2a2a2a',
               edgecolor='gray', labelcolor='white', fontsize=6.0)
     ax.set_title('Panel 3 — Ground Truth: What Was Hidden\nyellow=node-task  magenta=edge-task',
                  color='white', fontsize=9)
@@ -293,7 +293,7 @@ def draw_figure(result, binary_mask, skeleton, orig_img, save_path, title=''):
         Line2D([0],[0], marker='D', color='none', markerfacecolor='#999999',
                markersize=7, label='TN — correctly silent'),
     ]
-    ax.legend(handles=leg4, loc='lower right', facecolor='#2a2a2a',
+    ax.legend(handles=leg4, loc='best', facecolor='#2a2a2a',
               edgecolor='gray', labelcolor='white', fontsize=6.0)
     ax.set_title('Panel 4 — Node Prediction\n(which visible node lost a crack tip?)',
                  color='white', fontsize=9)
@@ -355,7 +355,7 @@ def draw_figure(result, binary_mask, skeleton, orig_img, save_path, title=''):
         Line2D([0],[0], color='#ff8800',   lw=1.5, linestyle='--', label='FN — missed'),
         Line2D([0],[0], color='#ff3333',   lw=1.5, linestyle='--', label='FP — false alarm'),
     ]
-    ax.legend(handles=leg5, loc='lower right', facecolor='#2a2a2a',
+    ax.legend(handles=leg5, loc='best', facecolor='#2a2a2a',
               edgecolor='gray', labelcolor='white', fontsize=6.0)
     ax.set_title('Panel 5 — Edge Prediction\n(magenta=hidden GT, green=TP, orange=FN)',
                  color='white', fontsize=9)
