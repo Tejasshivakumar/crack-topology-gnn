@@ -41,6 +41,7 @@ logs/
 
 # Text files
 *.txt
+!requirements.txt
 
 # Data (dataset lives outside the repo)
 data/

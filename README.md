@@ -1,8 +1,38 @@
-# From Pixels to Topology: A Three-Stage Pipeline for Road Crack Graph Analysis Using Graph Neural Networks
+# From Pixels to Topology: A Graph Neural Network Pipeline for Structural Crack Analysis
 
-**Authors:** Tejas Shivakumar, Aishwarya Shekar — DCU Practicum 2025–2026
+**Authors:** Tejas Shivakumar, Aishwarya Shekar. MSc Computing practicum, Dublin City University, 2025–2026.
 
-End-to-end pipeline for road crack topology analysis — from raw images to graph-structured data to GNN-based topology understanding.
+**Accepted as a poster at AICS 2026**, the International Conference on Artificial Intelligence and Cognitive Science (UCD Dublin, 15–16 October 2026).
+
+End-to-end pipeline for road crack topology analysis: from raw images, to graph-structured data, to GNN-based topology understanding.
+
+## Key results
+
+**Topology prediction** (node task: find nodes with a hidden neighbour after 20% of edges are removed; full table in [RESULTS.md](RESULTS.md)):
+
+| Model | Node Avg Precision | AUC-ROC |
+|---|---|---|
+| MLP (no graph, baseline) | 0.341 | 0.859 |
+| GCN | 0.342 | 0.846 |
+| GAT | 0.429 | 0.868 |
+| GraphSAGE | 0.489 | 0.905 |
+| **GINE** | **0.501** | 0.902 |
+
+GINE improves node AP by 47% over the structure-blind MLP, so the gain comes from message passing over crack topology rather than per-node features. The gap holds under hard-negative evaluation.
+
+**Segmentation** on crack_seg_clean (4,071 train / 698 test images at 448×448):
+
+| Model | Crack IoU | Crack Dice | clDice |
+|---|---|---|---|
+| HybridGraphUNet (pretrained encoder + GNN bottleneck) | 0.630 | 0.773 | 0.745 |
+| EnhancedGraphUNet (from scratch + GNN bottleneck) | 0.627 | 0.771 | **0.754** |
+| PlainResNetUNet (pretrained, no GNN) | **0.638** | **0.779** | 0.752 |
+
+The GNN bottleneck does not raise pixel overlap over a plain pretrained U-Net, but the scratch-trained GNN variant gives the best clDice, the topology-aware connectivity metric.
+
+## Citation
+
+If you use this work, please cite it using [CITATION.cff](CITATION.cff) (GitHub's "Cite this repository" button).
 
 ## Pipeline
 
@@ -347,11 +377,10 @@ python3 link_prediction/run.py \
 ## Setup
 
 ```bash
-pip install torch torchvision pytorch-lightning
-pip install torch-geometric
-pip install albumentations opencv-python timm wandb tqdm Pillow numpy
-pip install scikit-image scikit-learn sknw matplotlib scipy networkx
+pip install -r requirements.txt
 ```
+
+Install the PyTorch build that matches your hardware first if you need CUDA or Apple MPS support (see pytorch.org).
 
 ---
 

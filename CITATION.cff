@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "From Pixels to Topology: A Graph Neural Network Pipeline for Structural Crack Analysis"
+authors:
+  - family-names: Shivakumar
+    given-names: Tejas
+  - family-names: Shekar
+    given-names: Aishwarya
+date-released: 2026-10-15
+repository-code: "https://github.com/Tejasshivakumar/crack-topology-gnn"
+keywords:
+  - graph neural networks
+  - crack segmentation
+  - link prediction
+  - computer vision
+preferred-citation:
+  type: conference-paper
+  title: "From Pixels to Topology: A Graph Neural Network Pipeline for Structural Crack Analysis"
+  authors:
+    - family-names: Shivakumar
+      given-names: Tejas
+    - family-names: Shekar
+      given-names: Aishwarya
+  collection-title: "AICS 2026: International Conference on Artificial Intelligence and Cognitive Science"
+  year: 2026
